@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
 import 'package:ustc_assistant_m0/app/agent_workspace_page.dart';
 import 'package:ustc_assistant_m0/app/demo_runtime.dart';
@@ -17,6 +18,7 @@ import 'package:ustc_assistant_m0/core/speech_input_contract.dart';
 import 'package:ustc_assistant_m0/ios_i3_entry.dart';
 import 'package:ustc_assistant_m0/platform/demo_directory.dart';
 import 'package:ustc_assistant_m0/platform/native_observation_browser.dart';
+import 'package:ustc_assistant_m0/platform/owned_directory.dart';
 import 'package:ustc_assistant_m0/platform/runtime_platform_factory.dart';
 
 void main() {
@@ -237,9 +239,18 @@ final class _SyntheticPlatformFactory implements RuntimePlatformFactory {
     String? directoryPath,
     String? jwDirectoryPath,
   }) async {
-    final demo = await DemoDirectory.acquire('$root\\demo');
+    Future<OwnedDirectory> acquire(String child) async {
+      final path = p.join(root, child);
+      if (Platform.isWindows) return DemoDirectory.acquire(path);
+      // The host widget test exercises composition, not Darwin ownership.
+      // The Simulator suite separately acquires the actual iOS native lease.
+      await Directory(path).create();
+      return _WidgetFixtureDirectory(path);
+    }
+
+    final demo = await acquire('demo');
     try {
-      final formal = await DemoDirectory.acquire('$root\\formal');
+      final formal = await acquire('formal');
       return RuntimeDirectories(demo: demo, formal: formal);
     } on Object {
       await demo.release();
@@ -262,6 +273,60 @@ final class _SyntheticPlatformFactory implements RuntimePlatformFactory {
 
   @override
   SpeechInputPort createSpeech(DiagnosticsPort diagnostics) => _speech;
+}
+
+final class _WidgetFixtureDirectory implements OwnedDirectory {
+  _WidgetFixtureDirectory(this.path);
+
+  @override
+  final String path;
+  bool _released = false;
+
+  @override
+  p.Context get paths => p.context;
+
+  @override
+  bool get isHeld => !_released;
+
+  @override
+  void ensureHeld() {
+    if (_released) throw const AppFailure(FailureCode.ownershipLost);
+  }
+
+  @override
+  String checkedChildPath(String relative, {required bool directory}) {
+    ensureHeld();
+    final target = p.normalize(p.join(path, relative));
+    if (p.isAbsolute(relative) || !p.isWithin(path, target)) {
+      throw const AppFailure(FailureCode.unsafeDirectory);
+    }
+    final type = FileSystemEntity.typeSync(target, followLinks: false);
+    if (type != FileSystemEntityType.notFound &&
+        type !=
+            (directory
+                ? FileSystemEntityType.directory
+                : FileSystemEntityType.file)) {
+      throw const AppFailure(FailureCode.unsafeDirectory);
+    }
+    return target;
+  }
+
+  @override
+  String createPlainChildDirectory(String relative) {
+    final target = checkedChildPath(relative, directory: true);
+    Directory(target).createSync();
+    return checkedChildPath(relative, directory: true);
+  }
+
+  @override
+  void ensureDatabaseFilesSafe({String filename = 'm0_demo.sqlite'}) {
+    for (final suffix in ['', '-wal', '-shm']) {
+      checkedChildPath('$filename$suffix', directory: false);
+    }
+  }
+
+  @override
+  Future<void> release() async => _released = true;
 }
 
 final class _SyntheticProtector
