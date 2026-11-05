@@ -79,7 +79,7 @@ final class IOSNotificationBridge: NSObject, UNUserNotificationCenterDelegate {
         try noArguments(call)
         guard UIApplication.shared.applicationState == .active else { throw IOSNotificationFailure.maintenance }
         let text: String
-        if #available(iOS 15.4, *) { text = UIApplication.openNotificationSettingsURLString }
+        if #available(iOS 16.0, *) { text = UIApplication.openNotificationSettingsURLString }
         else { text = UIApplication.openSettingsURLString }
         guard let url = URL(string: text) else { throw IOSNotificationFailure.publishFailed }
         UIApplication.shared.open(url, options: [:]) { success in
