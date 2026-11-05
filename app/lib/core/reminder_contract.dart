@@ -290,6 +290,15 @@ final class NotificationActivation {
 
 enum NotificationQueueEvidence { operatingSystem, localRegistration }
 
+enum NotificationAuthorizationStatus {
+  unknown,
+  notDetermined,
+  denied,
+  authorized,
+  provisional,
+  ephemeral,
+}
+
 enum NotificationAccessAction { inspect, notifications, exactAlarms, settings }
 
 final class NotificationCapability {
@@ -301,6 +310,11 @@ final class NotificationCapability {
     this.exactScheduling,
     this.queueEvidence = NotificationQueueEvidence.operatingSystem,
     this.maximumPending = 512,
+    this.authorizationStatus = NotificationAuthorizationStatus.unknown,
+    this.alertsEnabled,
+    this.soundsEnabled,
+    this.lockScreenEnabled,
+    this.scheduledSummaryEnabled,
   });
   final bool available,
       enabledBySystem,
@@ -309,6 +323,11 @@ final class NotificationCapability {
   final bool? exactScheduling;
   final NotificationQueueEvidence queueEvidence;
   final int maximumPending;
+  final NotificationAuthorizationStatus authorizationStatus;
+  final bool? alertsEnabled,
+      soundsEnabled,
+      lockScreenEnabled,
+      scheduledSummaryEnabled;
 }
 
 abstract interface class NotificationPlatformPort {
@@ -325,8 +344,8 @@ abstract interface class NotificationActivationStatusPort {
   Stream<ReminderFailure> get activationFailures;
 }
 
-/// Optional Android handoff. Only a current C3 publication may reopen delivery
-/// after a durable maintenance block. Initialization and ordinary close cannot.
+/// Optional native handoff. Only a current C3 publication may reopen delivery
+/// after a maintenance block. Initialization and ordinary close cannot.
 abstract interface class NotificationPublicationControlPort {
   Future<void> bindPublication(ReminderPublication publication);
   Future<void> blockDelivery();
@@ -462,12 +481,19 @@ final class ReminderRuntimeView {
     this.desired = 0,
     this.complete = false,
     this.throughDay,
+    this.registeredThroughUtc,
     this.failure,
     this.capability,
   });
   final bool busy, complete;
   final int accepted, desired;
+
+  /// C3 projection boundary, independent of which requests fit the platform queue.
   final DateTime? throughDay;
+
+  /// Latest due time confirmed in the platform's pending/readback state.
+  final DateTime? registeredThroughUtc;
+  int get unregistered => desired > accepted ? desired - accepted : 0;
   final ReminderFailureCode? failure;
   final NotificationCapability? capability;
 }

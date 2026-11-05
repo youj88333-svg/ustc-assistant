@@ -7,6 +7,7 @@ import 'package:ustc_assistant_m0/core/diagnostics_contract.dart';
 import 'package:ustc_assistant_m0/core/reminder_contract.dart';
 import 'package:ustc_assistant_m0/core/speech_input_contract.dart';
 import 'package:ustc_assistant_m0/platform/ios_directory.dart';
+import 'package:ustc_assistant_m0/platform/ios_notifications.dart';
 import 'package:ustc_assistant_m0/platform/ios_runtime_platform_factory.dart';
 
 void main() {
@@ -134,7 +135,7 @@ void main() {
   });
 
   test(
-    'unimplemented iOS services are unavailable, never empty-success',
+    'iOS selects native notifications while unsupported services stay honest',
     () async {
       final factory = IOSRuntimePlatformFactory();
       final browser = factory.createBrowser();
@@ -153,7 +154,11 @@ void main() {
       await browser.dispose();
 
       final notifications = factory.createNotifications();
-      expect((await notifications.initialize()).available, isFalse);
+      expect(notifications, isA<IOSNotifications>());
+      await expectLater(
+        notifications.initialize(),
+        throwsA(isA<ReminderFailure>()),
+      );
       await expectLater(
         notifications.pending(),
         throwsA(

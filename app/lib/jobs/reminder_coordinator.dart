@@ -137,6 +137,7 @@ final class ReminderCoordinator {
     int desired = 0,
     bool complete = false,
     DateTime? through,
+    DateTime? registeredThroughUtc,
     ReminderFailureCode? failure,
   }) {
     _view = ReminderRuntimeView(
@@ -145,6 +146,7 @@ final class ReminderCoordinator {
       desired: desired,
       complete: complete,
       throughDay: through,
+      registeredThroughUtc: registeredThroughUtc,
       failure: failure,
       capability: _capability,
     );
@@ -168,7 +170,9 @@ final class ReminderCoordinator {
             _publish(
               accepted: _view.accepted,
               desired: _view.desired,
+              complete: _view.complete,
               through: _view.throughDay,
+              registeredThroughUtc: _view.registeredThroughUtc,
               failure: failure.code,
             );
             _log(
@@ -254,6 +258,7 @@ final class ReminderCoordinator {
         desired: _view.desired,
         complete: _view.complete,
         through: _view.throughDay,
+        registeredThroughUtc: _view.registeredThroughUtc,
       );
     } finally {
       _work = null;
@@ -302,6 +307,9 @@ final class ReminderCoordinator {
             failure: failure,
             desired: _view.desired,
             accepted: _view.accepted,
+            complete: false,
+            through: _view.throughDay,
+            registeredThroughUtc: _view.registeredThroughUtc,
           );
           _log(
             DiagnosticEventName.reminderFailed,
@@ -321,12 +329,20 @@ final class ReminderCoordinator {
   bool _live(int generation) =>
       !_closed && !_paused && generation == _generation;
   Future<void> _reconcile(int generation) async {
-    _publish(busy: true);
+    _publish(
+      busy: true,
+      accepted: _view.accepted,
+      desired: _view.desired,
+      complete: _view.complete,
+      through: _view.throughDay,
+      registeredThroughUtc: _view.registeredThroughUtc,
+      failure: _view.failure,
+    );
     final publication = await data.prepareReminderPublication();
     if (!_live(generation)) return;
     _lastPublication = publication;
     if (!publication.enabled && publication.prior.isEmpty && !_initialized) {
-      _publish(complete: true);
+      _publish(complete: true, through: publication.throughDay);
       return;
     }
     await _ensurePlatform();
@@ -346,12 +362,33 @@ final class ReminderCoordinator {
     final desired = {for (final m in publication.desired) m.request.id: m};
     final preserved = publication.prior.map((m) => m.request.id).toSet()
       ..removeAll(publication.invalidPriorIds);
+    final ordered = publication.desired.toList()
+      ..sort((left, right) {
+        final byTime = left.request.deliveryAtUtc.compareTo(
+          right.request.deliveryAtUtc,
+        );
+        return byTime != 0
+            ? byTime
+            : left.request.id.compareTo(right.request.id);
+      });
+    final capacity = (_capability?.maximumPending ?? 512).clamp(1, 512).toInt();
+    final retained = actual
+        .where(
+          (item) =>
+              !desired.containsKey(item.id) && preserved.contains(item.id),
+        )
+        .length;
+    final slotCount = max(0, capacity - retained).toInt();
+    final selected = ordered.take(slotCount).toList(growable: false);
+    final selectedIds = selected.map((mapping) => mapping.request.id).toSet();
     final remove = actual
         .where(
           (a) =>
               publication.invalidPriorIds.contains(a.id) ||
               !desired.containsKey(a.id) && !preserved.contains(a.id) ||
-              desired.containsKey(a.id) && !a.matches(desired[a.id]!.request),
+              desired.containsKey(a.id) &&
+                  (!selectedIds.contains(a.id) ||
+                      !a.matches(desired[a.id]!.request)),
         )
         .map((a) => a.id)
         .toSet();
@@ -366,16 +403,46 @@ final class ReminderCoordinator {
       await platform.cancel(id);
       await data.recordReminderCancelled(id);
     }
+    // Verify canceled queue entries before using the released slots. A native
+    // acknowledgement without readback cannot prove the near-term request fits.
+    final afterCancel = await platform.pending();
+    if (afterCancel.any((item) => remove.contains(item.id))) {
+      throw const ReminderFailure(ReminderFailureCode.cancelFailed);
+    }
+    for (final mapping in ordered.where(
+      (mapping) =>
+          !selectedIds.contains(mapping.request.id) &&
+          mapping.accepted &&
+          !remove.contains(mapping.request.id),
+    )) {
+      if (!_live(generation) ||
+          !await data.reminderPublicationCurrent(publication)) {
+        _again = true;
+        return;
+      }
+      await data.recordReminderCancelled(mapping.request.id);
+    }
     if (!_live(generation) ||
         !await data.reminderPublicationCurrent(publication)) {
       _again = true;
       return;
     }
-    var accepted = 0;
-    final pending = await platform.pending();
-    final retained = pending.where((a) => !desired.containsKey(a.id)).length;
-    var complete = publication.complete;
-    for (final mapping in publication.desired) {
+    var pending = afterCancel;
+    var accepted = confirmedCount(selected, pending);
+    var registeredThroughUtc = latestDueTime(pending);
+    var complete =
+        publication.complete && selected.length == publication.desired.length;
+    void publishProgress() => _publish(
+      busy: true,
+      accepted: accepted,
+      desired: publication.desired.length,
+      complete: false,
+      through: publication.throughDay,
+      registeredThroughUtc: registeredThroughUtc,
+    );
+
+    publishProgress();
+    for (final mapping in selected) {
       if (!_live(generation) ||
           !await data.reminderPublicationCurrent(publication)) {
         _again = true;
@@ -386,17 +453,15 @@ final class ReminderCoordinator {
           .toList();
       if (matching.length == 1 && matching.single.matches(mapping.request)) {
         await data.recordReminderAccepted(publication, mapping.request.id);
-        accepted++;
         continue;
       }
-      if (mapping.accepted) {
+      if (mapping.accepted && !remove.contains(mapping.request.id)) {
         await data.recordReminderCancelled(mapping.request.id);
       }
       if (_capability?.enabledBySystem != true) {
         throw const ReminderFailure(ReminderFailureCode.disabledBySystem);
       }
-      if (accepted + retained >=
-          (_capability?.maximumPending ?? 512).clamp(1, 512)) {
+      if (pending.length >= capacity) {
         complete = false;
         break;
       }
@@ -410,28 +475,67 @@ final class ReminderCoordinator {
       }
       // Windows reads its OS queue; Android confirms durable local registration
       // plus a successful AlarmManager call. Neither proves actual delivery.
-      final verified = (await platform.pending())
+      final verifiedQueue = await platform.pending();
+      final verified = verifiedQueue
           .where((p) => p.id == mapping.request.id)
           .toList();
       if (verified.length != 1 || !verified.single.matches(mapping.request)) {
         throw const ReminderFailure(ReminderFailureCode.publishFailed);
       }
+      if (verifiedQueue.length > capacity) {
+        await platform.cancel(mapping.request.id);
+        await data.recordReminderCancelled(mapping.request.id);
+        throw const ReminderFailure(ReminderFailureCode.publishFailed);
+      }
+      pending = verifiedQueue;
+      accepted = confirmedCount(selected, pending);
+      registeredThroughUtc = latestDueTime(pending);
+      publishProgress();
       await data.recordReminderAccepted(publication, mapping.request.id);
-      accepted++;
     }
     if (_live(generation)) {
+      final finishedComplete =
+          complete && accepted == publication.desired.length;
       _publish(
         accepted: accepted,
         desired: publication.desired.length,
-        complete: complete && accepted == publication.desired.length,
+        complete: finishedComplete,
         through: publication.throughDay,
+        registeredThroughUtc: registeredThroughUtc,
       );
       _log(
         DiagnosticEventName.reminderReconcileCompleted,
-        complete ? DiagnosticOutcome.complete : DiagnosticOutcome.truncated,
+        finishedComplete
+            ? DiagnosticOutcome.complete
+            : DiagnosticOutcome.truncated,
         null,
       );
     }
+  }
+
+  int confirmedCount(
+    List<ReminderMapping> selected,
+    List<NotificationPending> pending,
+  ) {
+    var count = 0;
+    for (final mapping in selected) {
+      final matching = pending
+          .where((item) => item.id == mapping.request.id)
+          .toList();
+      if (matching.length == 1 && matching.single.matches(mapping.request)) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  DateTime? latestDueTime(List<NotificationPending> pending) {
+    DateTime? latest;
+    for (final item in pending) {
+      final due = item.deliveryAtUtc.toUtc();
+      if (latest == null || due.isAfter(latest)) latest = due;
+    }
+    return latest;
   }
 
   Future<void> clearForMaintenance({bool nativeCleanupRequired = true}) async {

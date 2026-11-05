@@ -73,6 +73,74 @@ void main() {
     expect(port.cancelCalls, 1);
   });
 
+  testWidgets(
+    'manual-check-only copy offers visible login without password-save claims',
+    (tester) async {
+      final port = _FakeDailySyncPort(
+        initial: _snapshot(
+          enabled: true,
+          configured: true,
+          automaticAvailable: false,
+          phase: YoungDailySyncPhase.needsLogin,
+        ),
+      );
+      addTearDown(port.dispose);
+      await _pump(tester, port);
+
+      expect(find.text('每日二课检查'), findsOneWidget);
+      expect(find.text('开启每日检查'), findsOneWidget);
+      expect(find.textContaining('每天北京时间 06:00 后'), findsOneWidget);
+      expect(find.textContaining('在应用前台检查二课同步状态'), findsOneWidget);
+      expect(find.textContaining('退出后不运行'), findsOneWidget);
+      expect(find.textContaining('无需保存学校密码'), findsOneWidget);
+      expect(find.textContaining('不会向网页登录页投递学校密码'), findsOneWidget);
+      expect(find.textContaining('已保存的学校密码'), findsNothing);
+      expect(find.textContaining('自动尝试'), findsNothing);
+
+      await _tap(tester, find.byKey(const ValueKey('young-daily-sync-now')));
+      expect(port.syncNowCalls, 1);
+      expect(
+        find.byKey(const ValueKey('young-daily-sync-continue')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('young-daily-sync-cancel')),
+        findsOneWidget,
+      );
+      await _tap(
+        tester,
+        find.byKey(const ValueKey('young-daily-sync-continue')),
+      );
+      expect(port.continueCalls, 1);
+      expect(find.text('正在手动同步二课个人日历。'), findsOneWidget);
+      await _tap(tester, find.byKey(const ValueKey('young-daily-sync-cancel')));
+      expect(port.cancelCalls, 1);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'manual-check-only future and retry status stays foreground/manual',
+    (tester) async {
+      final port = _FakeDailySyncPort(
+        initial: _snapshot(
+          enabled: true,
+          configured: true,
+          automaticAvailable: false,
+          phase: YoungDailySyncPhase.failed,
+          nextAttemptAtUtc: DateTime.utc(2026, 10, 15, 0),
+        ),
+      );
+      addTearDown(port.dispose);
+      await _pump(tester, port);
+
+      expect(find.text('下次前台检查：2026-10-15 08:00（北京时间）'), findsOneWidget);
+      expect(find.text('本次手动同步未完成，可点立即同步重试。'), findsOneWidget);
+      expect(find.textContaining('下次自动尝试'), findsNothing);
+      expect(find.textContaining('自动尝试次数'), findsNothing);
+    },
+  );
+
   testWidgets('shows the previous success separately from a failed attempt', (
     tester,
   ) async {
@@ -396,6 +464,7 @@ YoungDailySyncView _snapshot({
   bool adviceOnly = false,
   bool suppressedToday = false,
   bool interactive = false,
+  bool automaticAvailable = true,
   YoungDailySyncPhase phase = YoungDailySyncPhase.disabled,
   DateTime? lastSuccessAtUtc,
   DateTime? firstDay,
@@ -407,6 +476,7 @@ YoungDailySyncView _snapshot({
   adviceOnly: adviceOnly,
   suppressedToday: suppressedToday,
   interactive: interactive,
+  automaticAvailable: automaticAvailable,
   phase: phase,
   lastSuccessAtUtc: lastSuccessAtUtc,
   firstDay: firstDay,
@@ -425,6 +495,7 @@ YoungDailySyncView _copyView(
   adviceOnly: old.adviceOnly,
   suppressedToday: old.suppressedToday,
   interactive: interactive ?? old.interactive,
+  automaticAvailable: old.automaticAvailable,
   phase: phase ?? old.phase,
   lastSuccessAtUtc: old.lastSuccessAtUtc,
   firstDay: old.firstDay,

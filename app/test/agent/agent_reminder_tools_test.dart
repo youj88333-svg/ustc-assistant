@@ -41,6 +41,13 @@ void main() {
         expect(runtime['maximum_pending'], 480);
         expect(runtime['meaning'], contains('不是系统队列独立枚举'));
         expect(runtime['meaning'], contains('不保证实际送达'));
+        expect(runtime['through_day'], '2026-10-20');
+        expect(
+          runtime['registered_through_utc'],
+          DateTime.utc(2026, 10, 19, 6, 5).toIso8601String(),
+        );
+        expect(runtime['unregistered'], 2);
+        expect(runtime['meaning'], contains('through_day表示C3期望投影的截止日期'));
         await run.finish();
         await fixture.store.close();
       },
@@ -689,8 +696,13 @@ final class _Fixture {
       preferences: store.agent,
       preferenceProposals: store.agent,
       reminders: store.features,
-      reminderRuntime: () =>
-          ReminderRuntimeView(accepted: 2, desired: 4, capability: capability),
+      reminderRuntime: () => ReminderRuntimeView(
+        accepted: 2,
+        desired: 4,
+        throughDay: DateTime.utc(2026, 10, 20),
+        registeredThroughUtc: DateTime.utc(2026, 10, 19, 6, 5),
+        capability: capability,
+      ),
       clock: _clock,
     );
     final session = tools.openSession();

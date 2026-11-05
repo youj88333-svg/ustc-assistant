@@ -23,6 +23,7 @@ void main() {
       () async {
         final disabled = _Harness(enabled: false);
         addTearDown(disabled.dispose);
+        expect(disabled.coordinator.view.automaticAvailable, isTrue);
         disabled.start();
         await _settle();
         expect(disabled.data.issuedGrants, 0);
@@ -79,6 +80,194 @@ void main() {
         await _settle();
         expect(harness.data.issuedGrants, 1);
         expect(harness.source.startCalls, 1);
+      },
+    );
+
+    test(
+      'manual-check-only platform never claims an automatic attempt',
+      () async {
+        for (final credentialSaved in <bool>[false, true]) {
+          final harness = _Harness(
+            automaticAvailable: false,
+            credentialSaved: credentialSaved,
+          );
+          addTearDown(harness.dispose);
+          expect(harness.coordinator.view.automaticAvailable, isFalse);
+          harness.start();
+          await _settle();
+
+          expect(harness.data.inspectCalls, greaterThan(0));
+          expect(harness.data.claimCalls, 0);
+          expect(harness.data.issuedGrants, 0);
+          expect(harness.source.startCalls, 0);
+          expect(
+            harness.coordinator.view.phase,
+            YoungDailySyncPhase.needsLogin,
+          );
+          expect(harness.coordinator.view.automaticAvailable, isFalse);
+        }
+      },
+    );
+
+    test(
+      'manual-check-only platform retains disabled, advice-only, and unbound states',
+      () async {
+        final cases = <({_Harness harness, YoungDailySyncPhase phase})>[
+          (
+            harness: _Harness(enabled: false, automaticAvailable: false),
+            phase: YoungDailySyncPhase.disabled,
+          ),
+          (
+            harness: _Harness(adviceOnly: true, automaticAvailable: false),
+            phase: YoungDailySyncPhase.paused,
+          ),
+          (
+            harness: _Harness(accountBound: false, automaticAvailable: false),
+            phase: YoungDailySyncPhase.needsLogin,
+          ),
+        ];
+        for (final scenario in cases) {
+          addTearDown(scenario.harness.dispose);
+          scenario.harness.start();
+          await _eventually(
+            () =>
+                scenario.harness.data.inspectCalls > 0 &&
+                scenario.harness.coordinator.view.phase == scenario.phase,
+          );
+          expect(scenario.harness.data.claimCalls, 0);
+          expect(scenario.harness.source.startCalls, 0);
+        }
+      },
+    );
+
+    test(
+      'manual-check-only platform preserves a full same-day success without a saved credential',
+      () async {
+        final harness = _Harness(
+          automaticAvailable: false,
+          credentialSaved: false,
+          nowUtc: DateTime.utc(2026, 10, 15, 1),
+        );
+        harness.data.lastSuccessAtUtc = DateTime.utc(2026, 10, 15, 0, 30);
+        harness.data.successFirstDay = DateTime.utc(2026, 10, 14);
+        harness.data.successEndDayExclusive = DateTime.utc(2026, 11, 14);
+        addTearDown(harness.dispose);
+        harness.start();
+        await _eventually(
+          () => harness.coordinator.view.phase == YoungDailySyncPhase.done,
+        );
+
+        expect(harness.data.claimCalls, 0);
+        expect(harness.source.startCalls, 0);
+        expect(harness.coordinator.view.lastSuccessAtUtc, isNotNull);
+        expect(harness.coordinator.view.nextAttemptAtUtc, isNotNull);
+      },
+    );
+
+    test(
+      'manual-check-only platform keeps login/continue and counts only a C3 full commit',
+      () async {
+        final harness = _Harness(
+          automaticAvailable: false,
+          credentialSaved: false,
+        )..source.behavior = _StartBehavior.loginChallenge;
+        addTearDown(harness.dispose);
+        harness.start();
+        await _settle();
+        expect(harness.data.issuedGrants, 0);
+
+        await harness.coordinator.syncNow();
+        final firstGrant = harness.data.lastIssuedGrant!;
+        expect(harness.data.manualClaims, <bool>[true]);
+        expect(harness.source.backgroundValues, <bool>[false]);
+        expect(harness.coordinator.view.phase, YoungDailySyncPhase.needsLogin);
+        expect(harness.coordinator.view.interactive, isTrue);
+        await harness.coordinator.continueAfterLogin();
+        expect(harness.source.continueCalls, 1);
+        harness.source.emitTerminal(committed: true);
+        await _eventually(() => harness.data.outcomes.length == 1);
+        expect(harness.data.lastSuccessAtUtc, isNull);
+        expect(firstGrant.revoked, isTrue);
+        await _eventually(
+          () =>
+              harness.data.activeGrant == null &&
+              !harness.coordinator.view.interactive,
+        );
+        expect(harness.coordinator.view.phase, YoungDailySyncPhase.needsLogin);
+
+        await harness.coordinator.syncNow();
+        final completeGrant = harness.data.lastIssuedGrant!;
+        expect(harness.data.manualClaims, <bool>[true, true]);
+        await harness.coordinator.continueAfterLogin();
+        harness.data.recordCommittedCalendar(completeGrant);
+        harness.source.emitTerminal(committed: true);
+        await _eventually(
+          () => harness.coordinator.view.phase == YoungDailySyncPhase.done,
+        );
+        expect(harness.data.lastSuccessAtUtc, _initialTime);
+        expect(harness.data.attempts, 0);
+        expect(harness.source.backgroundValues, <bool>[false, false]);
+      },
+    );
+
+    test(
+      'manual request waits for an in-flight status inspect instead of being dropped',
+      () async {
+        final harness = _Harness(
+          automaticAvailable: false,
+          credentialSaved: false,
+        );
+        addTearDown(harness.dispose);
+        harness.start();
+        await _settle();
+        harness.data.holdInspect();
+
+        final checking = harness.coordinator.check();
+        await harness.data.inspectStarted;
+        final manual = harness.coordinator.syncNow();
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(harness.data.claimCalls, 0);
+
+        harness.data.releaseInspect();
+        await Future.wait<void>(<Future<void>>[checking, manual]);
+        expect(harness.data.manualClaims, <bool>[true]);
+        expect(harness.source.startCalls, 1);
+        expect(harness.source.backgroundValues, <bool>[false]);
+        await harness.coordinator.cancel();
+      },
+    );
+
+    test(
+      'manual-check-only background cancellation rejects a late full commit',
+      () async {
+        final harness = _Harness(
+          automaticAvailable: false,
+          credentialSaved: false,
+          cancelOnBackground: true,
+        )..source.behavior = _StartBehavior.loginChallenge;
+        harness.source.holdCancel();
+        addTearDown(harness.dispose);
+        harness.start();
+        await _settle();
+        await harness.coordinator.syncNow();
+        final grant = harness.data.lastIssuedGrant!;
+
+        harness.coordinator.onForeground(false);
+        await _eventually(() => harness.source.cancelCalls == 1);
+        expect(grant.revoked, isTrue);
+        expect(harness.data.activeGrant, isNull);
+        expect(harness.data.outcomes.last, YoungDailySyncOutcome.interrupted);
+        expect(
+          () => harness.data.recordCommittedCalendar(grant),
+          throwsA(isA<AppFailure>()),
+        );
+        expect(harness.data.lastSuccessAtUtc, isNull);
+
+        harness.source.releaseCancel();
+        await _eventually(() => !harness.source.syncView.busy);
+        await _eventually(
+          () => harness.coordinator.view.phase == YoungDailySyncPhase.paused,
+        );
       },
     );
 
@@ -687,6 +876,7 @@ final class _Harness {
     bool credentialSaved = true,
     bool adviceOnly = false,
     bool cancelOnBackground = false,
+    bool automaticAvailable = true,
     Duration checkInterval = const Duration(hours: 1),
     Duration jobTimeout = const Duration(seconds: 10),
   }) : clock = _MutableClock(nowUtc ?? _initialTime),
@@ -712,6 +902,7 @@ final class _Harness {
       checkInterval: checkInterval,
       jobTimeout: jobTimeout,
       cancelOnBackground: cancelOnBackground,
+      automaticAvailable: automaticAvailable,
     );
   }
 
@@ -792,12 +983,15 @@ final class _FakeData implements YoungDailySyncDataPort {
   int claimCalls = 0;
   int issuedGrants = 0;
   final outcomes = <YoungDailySyncOutcome>[];
+  final manualClaims = <bool>[];
   _FakeGrant? activeGrant;
   _FakeGrant? lastIssuedGrant;
   _AttemptState? _attemptBeforeClaim;
   void Function()? onClaim;
   Object? finishError;
   Completer<void>? finishStarted;
+  Completer<void>? _inspectGate;
+  Completer<void>? _inspectStarted;
   Completer<void>? _claimGate;
   Completer<void>? _claimStarted;
   Future<void> get claimStarted => _claimStarted!.future;
@@ -833,7 +1027,22 @@ final class _FakeData implements YoungDailySyncDataPort {
   @override
   Future<YoungDailySyncSnapshot> inspect() async {
     inspectCalls++;
+    final started = _inspectStarted;
+    if (started != null && !started.isCompleted) started.complete();
+    await _inspectGate?.future;
     return snapshot;
+  }
+
+  void holdInspect() {
+    _inspectGate = Completer<void>();
+    _inspectStarted = Completer<void>();
+  }
+
+  Future<void> get inspectStarted => _inspectStarted!.future;
+
+  void releaseInspect() {
+    final gate = _inspectGate;
+    if (gate != null && !gate.isCompleted) gate.complete();
   }
 
   @override
@@ -851,6 +1060,7 @@ final class _FakeData implements YoungDailySyncDataPort {
   @override
   Future<YoungDailySyncGrant?> claim({bool manual = false}) async {
     claimCalls++;
+    manualClaims.add(manual);
     onClaim?.call();
     if (activeGrant != null || adviceRestricted) return null;
     final plan = planYoungDailySync(snapshot, clock.nowUtc, manual: manual);

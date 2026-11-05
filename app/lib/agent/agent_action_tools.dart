@@ -647,12 +647,16 @@ final class _AgentActionToolSession
           'through_day': runtime?.throughDay == null
               ? null
               : _dateOnly(runtime!.throughDay!),
+          'registered_through_utc': runtime?.registeredThroughUtc
+              ?.toUtc()
+              .toIso8601String(),
+          'unregistered': runtime?.unregistered,
           'failure': runtime?.failure?.name,
           'meaning':
               capability?.queueEvidence ==
                   NotificationQueueEvidence.localRegistration
-              ? '已登记表示本地持久登记和系统调用回执，不是系统队列独立枚举；精确权限不足时可能延后，不保证实际送达。'
-              : '本应用当前对账状态；已登记不保证用户一定看到通知，系统设置仍有效。',
+              ? 'through_day表示C3期望投影的截止日期；registered_through_utc是已登记项目的最晚时刻。已登记表示本地持久登记及系统调用回执，不是系统队列独立枚举，也不保证实际送达。'
+              : 'through_day表示C3期望投影的截止日期；registered_through_utc是系统队列读回项目的最晚时刻；系统设置仍有效，读回不保证用户一定看到通知。',
         },
         if (inspection != null)
           'target': {

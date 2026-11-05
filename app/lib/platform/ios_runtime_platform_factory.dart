@@ -11,6 +11,7 @@ import '../core/reminder_contract.dart';
 import '../core/speech_input_contract.dart';
 import 'ios_credential_protector.dart';
 import 'ios_directory.dart';
+import 'ios_notifications.dart';
 import 'native_observation_browser.dart';
 import 'runtime_platform_factory.dart'
     show RuntimeDirectories, RuntimePlatformFactory;
@@ -91,8 +92,7 @@ final class IOSRuntimePlatformFactory implements RuntimePlatformFactory {
   );
 
   @override
-  NotificationPlatformPort createNotifications() =>
-      UnavailableMobileNotifications();
+  NotificationPlatformPort createNotifications() => IOSNotifications();
 
   @override
   SpeechInputPort createSpeech(DiagnosticsPort diagnostics) =>

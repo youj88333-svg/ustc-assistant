@@ -64,6 +64,129 @@ void main() {
     await data._changes.close();
   });
   test(
+    'a full low-capacity queue gives new near reminders priority and refills',
+    () async {
+      final start = DateTime.utc(2026, 10, 15, 9);
+      final requests = List.generate(
+        65,
+        (index) => _request(
+          id: 'notice_$index',
+          deliveryAtUtc: start.add(Duration(minutes: index)),
+        ),
+      );
+      final mappings = requests.map(_mapping).toList();
+      final first = _publication(
+        desired: mappings,
+        prior: mappings.skip(5).toList(),
+      );
+      final afterFirstDelivery = _publication(
+        desired: mappings.skip(1).toList(),
+        prior: mappings,
+      );
+      final data = _FakeReminderData(
+        publication: first,
+        nextPublication: afterFirstDelivery,
+      );
+      final platform = _FakeNotifications(
+        capability: const NotificationCapability(
+          available: true,
+          enabledBySystem: true,
+          schedulesAfterExit: true,
+          activationAvailable: true,
+          maximumPending: 60,
+        ),
+      )..pendingItems.addAll(requests.skip(5).map(_pending));
+      final coordinator = ReminderCoordinator(data: data, platform: platform);
+
+      await coordinator.refresh();
+
+      expect(platform.scheduleCalls, 5);
+      expect(platform.pendingItems, hasLength(60));
+      expect(
+        platform.pendingItems.map((item) => item.id).toSet(),
+        requests.take(60).map((request) => request.id).toSet(),
+      );
+      expect(data.cancelledIds, requests.skip(60).map((request) => request.id));
+      expect(
+        first.desired,
+        hasLength(65),
+      ); // C3 keeps all projected expectations.
+      expect(coordinator.view.accepted, 60);
+      expect(coordinator.view.desired, 65);
+      expect(coordinator.view.unregistered, 5);
+      expect(coordinator.view.complete, isFalse);
+      expect(coordinator.view.registeredThroughUtc, requests[59].deliveryAtUtc);
+
+      // Delivery frees one slot; the next refresh fills it with the next nearest
+      // expected reminder without a C3 business edit.
+      platform.pendingItems.removeWhere((item) => item.id == requests.first.id);
+      await coordinator.refresh();
+      expect(platform.scheduleCalls, 6);
+      expect(platform.pendingItems, hasLength(60));
+      expect(
+        platform.pendingItems.map((item) => item.id),
+        contains('notice_60'),
+      );
+      expect(coordinator.view.accepted, 60);
+      expect(coordinator.view.desired, 64);
+      expect(coordinator.view.unregistered, 4);
+      expect(coordinator.view.registeredThroughUtc, requests[60].deliveryAtUtc);
+      await coordinator.close();
+      await data._changes.close();
+    },
+  );
+  test(
+    'unknown prior queue entries are preserved and occupy capacity',
+    () async {
+      final start = DateTime.utc(2026, 10, 15, 9);
+      final requests = List.generate(
+        3,
+        (index) => _request(
+          id: 'known_$index',
+          deliveryAtUtc: start.add(Duration(minutes: index)),
+        ),
+      );
+      final unknown = _request(
+        id: 'unknown_prior',
+        deliveryAtUtc: start.add(const Duration(days: 30)),
+      );
+      final mappings = requests.map(_mapping).toList();
+      final data = _FakeReminderData(
+        publication: _publication(
+          desired: mappings,
+          prior: [_mapping(unknown, accepted: true)],
+        ),
+      );
+      final platform =
+          _FakeNotifications(
+              capability: const NotificationCapability(
+                available: true,
+                enabledBySystem: true,
+                schedulesAfterExit: true,
+                activationAvailable: true,
+                maximumPending: 2,
+              ),
+            )
+            ..pendingItems.add(_pending(unknown))
+            ..pendingItems.add(_pending(requests.last));
+      final coordinator = ReminderCoordinator(data: data, platform: platform);
+
+      await coordinator.refresh();
+
+      expect(platform.pendingItems, hasLength(2));
+      expect(platform.pendingItems.map((item) => item.id).toSet(), {
+        'unknown_prior',
+        'known_0',
+      });
+      expect(data.cancelledIds, ['known_2']);
+      expect(coordinator.view.accepted, 1);
+      expect(coordinator.view.unregistered, 2);
+      expect(coordinator.view.registeredThroughUtc, unknown.deliveryAtUtc);
+      await coordinator.close();
+      await data._changes.close();
+    },
+  );
+  test(
     'a running coordinator fills the next slot after OS delivery without a C3 edit',
     () {
       fakeAsync((time) {
@@ -271,6 +394,8 @@ void main() {
 
       expect(platform.scheduleCalls, 1);
       expect(data.acceptedIds, isEmpty);
+      expect(coordinator.view.accepted, 0);
+      expect(coordinator.view.registeredThroughUtc, isNull);
       expect(coordinator.view.failure, ReminderFailureCode.publishFailed);
       await coordinator.close();
     },

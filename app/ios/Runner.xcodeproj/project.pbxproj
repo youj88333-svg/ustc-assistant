@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F30000000000000000000001 /* IOSNotificationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F30000000000000000000011; };
+		F30000000000000000000002 /* IOSNotificationBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = F30000000000000000000012; };
 		F20000000000000000000001 /* IOSObservationBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000011; };
 		F20000000000000000000002 /* IOSSchoolPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000012; };
 		F20000000000000000000003 /* IOSSchoolStoreLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000013; };
@@ -50,6 +52,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		F30000000000000000000011 /* IOSNotificationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSNotificationPolicy.swift; sourceTree = "<group>"; };
+		F30000000000000000000012 /* IOSNotificationBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSNotificationBridge.swift; sourceTree = "<group>"; };
 		F20000000000000000000011 /* IOSObservationBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSObservationBridge.swift; sourceTree = "<group>"; };
 		F20000000000000000000012 /* IOSSchoolPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSSchoolPolicy.swift; sourceTree = "<group>"; };
 		F20000000000000000000013 /* IOSSchoolStoreLedger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSSchoolStoreLedger.swift; sourceTree = "<group>"; };
@@ -141,6 +145,8 @@
 				F10000000000000000000003 /* IOSCredentialVault.swift */,
 				F10000000000000000000004 /* IOSPrivateStorage.swift */,
 				F20000000000000000000011 /* IOSObservationBridge.swift */,
+				F30000000000000000000011 /* IOSNotificationPolicy.swift */,
+				F30000000000000000000012 /* IOSNotificationBridge.swift */,
 				F20000000000000000000012 /* IOSSchoolPolicy.swift */,
 				F20000000000000000000013 /* IOSSchoolStoreLedger.swift */,
 				F20000000000000000000014 /* IOSSchoolScripts.swift */,
@@ -311,6 +317,8 @@
 				F10000000000000000000001 /* IOSCredentialVault.swift in Sources */,
 				F10000000000000000000002 /* IOSPrivateStorage.swift in Sources */,
 				F20000000000000000000001 /* IOSObservationBridge.swift in Sources */,
+				F30000000000000000000001 /* IOSNotificationPolicy.swift in Sources */,
+				F30000000000000000000002 /* IOSNotificationBridge.swift in Sources */,
 				F20000000000000000000002 /* IOSSchoolPolicy.swift in Sources */,
 				F20000000000000000000003 /* IOSSchoolStoreLedger.swift in Sources */,
 				F20000000000000000000004 /* IOSSchoolScripts.swift in Sources */,

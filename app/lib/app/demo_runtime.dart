@@ -873,7 +873,8 @@ final class _RuntimeAssembly {
             b.maintenance.view.blocksProduct,
         adviceOnly: () => b.agentCoordinator.view.adviceOnly,
         clock: b.clock,
-        cancelOnBackground: Platform.isAndroid,
+        cancelOnBackground: Platform.isAndroid || Platform.isIOS,
+        automaticAvailable: !Platform.isIOS,
       );
       _dailyAgentSubscription = b.agentCoordinator.changes.listen(
         (_) => daily.onAgentStateChanged(),

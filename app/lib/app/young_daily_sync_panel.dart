@@ -156,6 +156,7 @@ final class _YoungDailySyncPanelState extends State<YoungDailySyncPanel> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final manualCheck = !_view.automaticAvailable;
     final canCancel =
         (_view.phase == YoungDailySyncPhase.syncing || _view.interactive) &&
         _pendingAction != 'cancel';
@@ -180,9 +181,10 @@ final class _YoungDailySyncPanelState extends State<YoungDailySyncPanel> {
 
     return WorkspaceSection(
       key: const ValueKey('young-daily-sync-panel'),
-      title: '每日二课自动同步',
-      description:
-          '开启后，每天北京时间 06:00 后，应用在前台空闲时同步昨天起 31 天的二课个人日历（仅活动关联记录）。可使用已保存的学校密码，不消耗模型额度；应用退出后不会运行。',
+      title: manualCheck ? '每日二课检查' : '每日二课自动同步',
+      description: manualCheck
+          ? '每天北京时间 06:00 后，在应用前台检查二课同步状态。点“立即同步”后，在学校窗口手动登录并继续；应用不会向网页登录页投递学校密码，手动输入的密码不会交给应用保存，也无需保存学校密码。应用退出后不运行。'
+          : '开启后，每天北京时间 06:00 后，应用在前台空闲时同步昨天起 31 天的二课个人日历（仅活动关联记录）。可使用已保存的学校密码，不消耗模型额度；应用退出后不会运行。',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -192,7 +194,7 @@ final class _YoungDailySyncPanelState extends State<YoungDailySyncPanel> {
               key: const ValueKey('young-daily-sync-toggle'),
               contentPadding: EdgeInsets.zero,
               visualDensity: VisualDensity.standard,
-              title: const Text('开启每日自动同步'),
+              title: Text(manualCheck ? '开启每日检查' : '开启每日自动同步'),
               value: _view.enabled,
               onChanged: _settingEnabled ? null : _setEnabled,
             ),
@@ -210,7 +212,11 @@ final class _YoungDailySyncPanelState extends State<YoungDailySyncPanel> {
           if (_view.nextAttemptAtUtc != null) ...[
             const SizedBox(height: 3),
             Text(
-              '${_view.phase == YoungDailySyncPhase.failed ? '下次重试' : '下次自动尝试'}：${formatBeijing(_view.nextAttemptAtUtc!)}（北京时间）',
+              '${manualCheck
+                  ? '下次前台检查'
+                  : _view.phase == YoungDailySyncPhase.failed
+                  ? '下次重试'
+                  : '下次自动尝试'}：${formatBeijing(_view.nextAttemptAtUtc!)}（北京时间）',
             ),
           ],
           const SizedBox(height: 4),
@@ -221,18 +227,25 @@ final class _YoungDailySyncPanelState extends State<YoungDailySyncPanel> {
           if (!_view.configured) ...[
             const SizedBox(height: 3),
             Text(
-              '请先在下方绑定二课账号并保存学校密码，再使用每日自动同步。',
+              manualCheck
+                  ? '请先在下方绑定二课账号；每日检查不要求保存学校密码。'
+                  : '请先在下方绑定二课账号并保存学校密码，再使用每日自动同步。',
               style: TextStyle(color: scheme.tertiary),
             ),
           ],
           if (_view.adviceOnly) ...[
             const SizedBox(height: 3),
-            Text('仅建议模式下自动同步已暂停。', style: TextStyle(color: scheme.tertiary)),
+            Text(
+              manualCheck ? '仅建议模式下每日检查已暂停。' : '仅建议模式下自动同步已暂停。',
+              style: TextStyle(color: scheme.tertiary),
+            ),
           ],
           if (_view.suppressedToday) ...[
             const SizedBox(height: 3),
             Text(
-              '清空日程后，今天不会自动补建；你仍可主动同步。',
+              manualCheck
+                  ? '清空日程后，今天不会自动补建；你仍可点立即同步。'
+                  : '清空日程后，今天不会自动补建；你仍可主动同步。',
               style: TextStyle(color: scheme.tertiary),
             ),
           ],
@@ -291,17 +304,20 @@ final class _YoungDailySyncPanelState extends State<YoungDailySyncPanel> {
 }
 
 String _rangeLabel(YoungDailySyncView view) {
+  final prefix = view.automaticAvailable ? '滚动范围' : '检查范围';
   final first = view.firstDay;
   final endExclusive = view.endDayExclusive;
   if (first == null || endExclusive == null || !endExclusive.isAfter(first)) {
-    return '滚动范围：每天 06:00 后读取昨天起 31 天（首尾均含）。';
+    return '$prefix：每天 06:00 后读取昨天起 31 天（首尾均含）。';
   }
   final lastInclusive = endExclusive.subtract(const Duration(days: 1));
-  return '滚动范围：${_formatDate(first)} 至 ${_formatDate(lastInclusive)}（含）。';
+  return '$prefix：${_formatDate(first)} 至 ${_formatDate(lastInclusive)}（含）。';
 }
 
 String? _syncStartBlockedReason(YoungDailySyncView view) {
-  if (!view.enabled) return '先开启每日自动同步，才能立即同步。';
+  if (!view.enabled) {
+    return view.automaticAvailable ? '先开启每日自动同步，才能立即同步。' : '先开启每日检查，才能立即同步。';
+  }
   if (view.adviceOnly) return '仅建议模式下无法立即同步。';
   return null;
 }
@@ -311,16 +327,37 @@ String _formatDate(DateTime value) {
   return '${value.year}-${two(value.month)}-${two(value.day)}';
 }
 
-String _statusLabel(YoungDailySyncView view) => switch (view.phase) {
-  YoungDailySyncPhase.disabled => '每日自动同步已关闭。',
-  YoungDailySyncPhase.scheduled => '已开启，等待每天 06:00 后的自动同步时段。',
-  YoungDailySyncPhase.waitingForIdle => '已到同步时段，等待应用前台空闲。',
-  YoungDailySyncPhase.syncing => '正在同步二课个人日历。',
-  YoungDailySyncPhase.needsLogin =>
-    view.interactive ? '请在学校窗口完成登录后继续。' : '自动尝试已结束，可打开学校窗口登录后继续。',
-  YoungDailySyncPhase.done => '最近一次同步已完成。',
-  YoungDailySyncPhase.failed => '本轮同步未完成，自动尝试次数有上限。',
-  YoungDailySyncPhase.paused =>
-    view.adviceOnly ? '仅建议模式下每日自动同步已暂停。' : '每日自动同步当前已暂停。',
-  YoungDailySyncPhase.closed => '每日同步服务当前不可用。',
-};
+String _statusLabel(YoungDailySyncView view) {
+  if (!view.automaticAvailable) {
+    return switch (view.phase) {
+      YoungDailySyncPhase.disabled => '每日检查已关闭。',
+      YoungDailySyncPhase.scheduled => '每天 06:00 后，打开应用时检查每日同步状态。',
+      YoungDailySyncPhase.waitingForIdle => '应用正忙，空闲后可点立即同步。',
+      YoungDailySyncPhase.syncing => '正在手动同步二课个人日历。',
+      YoungDailySyncPhase.needsLogin =>
+        view.interactive ? '请在学校窗口手动登录后继续。' : '需要同步时，点“立即同步”打开学校窗口并手动登录。',
+      YoungDailySyncPhase.done => '今天的完整二课同步已完成。',
+      YoungDailySyncPhase.failed => '本次手动同步未完成，可点立即同步重试。',
+      YoungDailySyncPhase.paused =>
+        view.adviceOnly
+            ? '仅建议模式下每日检查已暂停。'
+            : view.suppressedToday
+            ? '今天不会自动补建；需要时可点立即同步。'
+            : '返回应用前台后检查每日同步状态。',
+      YoungDailySyncPhase.closed => '每日检查服务当前不可用。',
+    };
+  }
+  return switch (view.phase) {
+    YoungDailySyncPhase.disabled => '每日自动同步已关闭。',
+    YoungDailySyncPhase.scheduled => '已开启，等待每天 06:00 后的自动同步时段。',
+    YoungDailySyncPhase.waitingForIdle => '已到同步时段，等待应用前台空闲。',
+    YoungDailySyncPhase.syncing => '正在同步二课个人日历。',
+    YoungDailySyncPhase.needsLogin =>
+      view.interactive ? '请在学校窗口完成登录后继续。' : '自动尝试已结束，可打开学校窗口登录后继续。',
+    YoungDailySyncPhase.done => '最近一次同步已完成。',
+    YoungDailySyncPhase.failed => '本轮同步未完成，自动尝试次数有上限。',
+    YoungDailySyncPhase.paused =>
+      view.adviceOnly ? '仅建议模式下每日自动同步已暂停。' : '每日自动同步当前已暂停。',
+    YoungDailySyncPhase.closed => '每日同步服务当前不可用。',
+  };
+}

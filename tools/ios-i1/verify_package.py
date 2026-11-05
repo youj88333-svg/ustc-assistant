@@ -20,6 +20,7 @@ from typing import Any, BinaryIO
 APP_BUNDLE_ID = "cn.ustcassistant.ios.private"
 I1_MANIFEST_PATH = "Payload/Runner.app/ios-i1-provenance.json"
 I2_MANIFEST_PATH = "Payload/Runner.app/ios-i2-provenance.json"
+I3_MANIFEST_PATH = "Payload/Runner.app/ios-i3-provenance.json"
 MANIFEST_PATH = I1_MANIFEST_PATH  # Keep the historical I1 default for callers/tests.
 APP_INFO_PATH = "Payload/Runner.app/Info.plist"
 RUNNER_EXECUTABLE_PATH = "Payload/Runner.app/Runner"
@@ -30,6 +31,13 @@ FLUTTER_FRAMEWORK_ROOT = "Payload/Runner.app/Frameworks/Flutter.framework"
 SCHOOL_SCRIPT_NAMES = ("jw_probe.js", "young_transport.js")
 SCHOOL_SCRIPT_MAX_BYTES = 512 * 1024
 I2_DEBUG_MARKERS = (b"i2Fixture", b"i2StoreExists")
+I3_DEBUG_MARKERS = (b"i3Fixture",)
+I3_NOTIFICATION_WIRING_MARKERS = (
+    b"ustc_assistant/ios_notifications_v1",
+    b"getPendingNotificationRequestsWithCompletionHandler:",
+    b"addNotificationRequest:withCompletionHandler:",
+    b"removePendingNotificationRequestsWithIdentifiers:",
+)
 
 MACHO_THIN_MAGICS = {
     b"\xfe\xed\xfa\xce",  # 32-bit big endian
@@ -103,6 +111,8 @@ def _stage_manifest_path(stage: int) -> str:
         return I1_MANIFEST_PATH
     if stage == 2:
         return I2_MANIFEST_PATH
+    if stage == 3:
+        return I3_MANIFEST_PATH
     _fail("invalid_stage")
 
 
@@ -111,6 +121,8 @@ def _info_revision_key(stage: int) -> str:
         return "I1SourceRevision"
     if stage == 2:
         return "I2SourceRevision"
+    if stage == 3:
+        return "I3SourceRevision"
     _fail("invalid_stage")
 
 
@@ -149,6 +161,29 @@ def _validate_manifest(value: dict[str, Any], expected_revision: str, stage: int
             ):
                 _fail("invalid_manifest")
         required["schoolScripts"] = school_scripts
+    elif stage == 3:
+        required.update({
+            "kind": "ios-i3-unsigned-ipa-v1",
+            "scope": "i3-notifications-foreground",
+            "authentication": "manual",
+            "schoolStore": "wk-uuid-v1",
+            "schoolScripts": value.get("schoolScripts"),
+            "notificationBackend": "user-notifications-v1",
+            "notificationCapacity": 60,
+            "dailyAuthentication": "manual",
+            "foregroundOnly": True,
+        })
+        school_scripts = value.get("schoolScripts")
+        if not isinstance(school_scripts, dict) or set(school_scripts) != set(SCHOOL_SCRIPT_NAMES):
+            _fail("invalid_manifest")
+        for name in SCHOOL_SCRIPT_NAMES:
+            digest = school_scripts.get(name)
+            if (
+                not isinstance(digest, str)
+                or len(digest) != 64
+                or any(ch not in "0123456789abcdef" for ch in digest)
+            ):
+                _fail("invalid_manifest")
     else:
         _fail("invalid_stage")
     if set(value) != set(required):
@@ -176,7 +211,9 @@ def _validate_runner_info(value: dict[str, Any], expected_revision: str, stage: 
         _fail("platform_identity_mismatch")
     if value.get(_info_revision_key(stage)) != expected_revision:
         _fail("source_revision_mismatch")
-    if stage == 2 and value.get("I1SourceRevision") != expected_revision:
+    if stage in (2, 3) and value.get("I1SourceRevision") != expected_revision:
+        _fail("source_revision_mismatch")
+    if stage == 3 and value.get("I2SourceRevision") != expected_revision:
         _fail("source_revision_mismatch")
     executable = value.get("CFBundleExecutable")
     if (
@@ -257,6 +294,18 @@ def _contains_camera_or_location_permission(value: Any) -> bool:
     return False
 
 
+def _contains_remote_notification_entitlement(value: Any) -> bool:
+    for item in _walk_plist_values(value):
+        if not isinstance(item, dict):
+            continue
+        for key in item:
+            if isinstance(key, str):
+                folded = key.casefold()
+                if folded == "aps-environment" or folded.endswith(".aps-environment"):
+                    return True
+    return False
+
+
 def _is_model_asset(path: str) -> bool:
     base = path.rsplit("/", 1)[-1].casefold()
     return base == "tokens.txt" or any(base.endswith(suffix) for suffix in MODEL_SUFFIXES)
@@ -305,21 +354,28 @@ def _validate_info_and_entitlements(
             value = _parse_plist_member(zf, members, path)
             if _contains_audio_permission(value):
                 _fail("audio_permission_present")
-            if stage == 2 and _contains_camera_or_location_permission(value):
+            if stage in (2, 3) and _contains_camera_or_location_permission(value):
                 _fail("restricted_permission_present")
             if _contains_prohibited_declaration(value):
                 _fail("app_group_declaration_present")
             if path == APP_INFO_PATH:
-                if stage == 2 and any(
+                if stage in (2, 3) and any(
                     isinstance(key, str) and key.casefold() == "nsapptransportsecurity"
                     for key in value
                 ):
                     _fail("transport_override_present")
+                if stage == 3 and any(
+                    isinstance(key, str) and key.casefold() == "uibackgroundmodes"
+                    for key in value
+                ):
+                    _fail("background_mode_present")
                 runner_info = value
         elif folded.endswith(".entitlements"):
             value = _parse_plist_member(zf, members, path)
             if _contains_prohibited_declaration(value):
                 _fail("app_group_entitlement_present")
+            if stage == 3 and _contains_remote_notification_entitlement(value):
+                _fail("remote_notifications_entitlement_present")
     if runner_info is None:
         _fail("missing_required_member")
     return runner_info
@@ -373,7 +429,7 @@ def _validate_school_scripts(
     manifest: dict[str, Any],
     stage: int,
 ) -> None:
-    if stage != 2:
+    if stage not in (2, 3):
         return
     declared = manifest["schoolScripts"]
     for name in SCHOOL_SCRIPT_NAMES:
@@ -386,10 +442,14 @@ def _validate_school_scripts(
             _fail("fixed_school_reader_mismatch")
 
 
-def _contains_i2_debug_marker(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bool:
+def _contains_any_binary_marker(
+    zf: zipfile.ZipFile,
+    info: zipfile.ZipInfo,
+    markers: tuple[bytes, ...],
+) -> bool:
     tail = b""
     count = 0
-    overlap = max(len(marker) for marker in I2_DEBUG_MARKERS) - 1
+    overlap = max(len(marker) for marker in markers) - 1
     try:
         with zf.open(info, "r") as stream:
             while True:
@@ -400,7 +460,7 @@ def _contains_i2_debug_marker(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> boo
                 if count > info.file_size or count > _I0.MAX_FILE_UNCOMPRESSED:
                     _fail("invalid_archive_member")
                 combined = tail + chunk
-                if any(marker in combined for marker in I2_DEBUG_MARKERS):
+                if any(marker in combined for marker in markers):
                     return True
                 tail = combined[-overlap:] if overlap else b""
     except VerificationError:
@@ -412,11 +472,49 @@ def _contains_i2_debug_marker(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> boo
     return False
 
 
+def _contains_i2_debug_marker(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bool:
+    return _contains_any_binary_marker(zf, info, I2_DEBUG_MARKERS)
+
+
+def _contains_i3_debug_marker(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bool:
+    return _contains_any_binary_marker(zf, info, I3_DEBUG_MARKERS)
+
+
+def _contains_all_binary_markers(
+    zf: zipfile.ZipFile,
+    info: zipfile.ZipInfo,
+    markers: tuple[bytes, ...],
+) -> bool:
+    tail = b""
+    count = 0
+    found: set[bytes] = set()
+    overlap = max(len(marker) for marker in markers) - 1
+    try:
+        with zf.open(info, "r") as stream:
+            while True:
+                chunk = stream.read(_I0.STREAM_CHUNK_SIZE)
+                if not chunk:
+                    break
+                count += len(chunk)
+                if count > info.file_size or count > _I0.MAX_FILE_UNCOMPRESSED:
+                    _fail("invalid_archive_member")
+                combined = tail + chunk
+                found.update(marker for marker in markers if marker in combined)
+                tail = combined[-overlap:] if overlap else b""
+    except VerificationError:
+        raise
+    except (OSError, RuntimeError, EOFError, zipfile.BadZipFile, NotImplementedError):
+        _fail("invalid_archive_member")
+    if count != info.file_size:
+        _fail("invalid_archive_member")
+    return len(found) == len(set(markers))
+
+
 def _is_macho_magic(magic: bytes) -> bool:
     return magic in MACHO_THIN_MAGICS or magic in _I0.FAT_MACHO_MAGICS
 
 
-def _parse_signature_superblob(data: bytes) -> None:
+def _parse_signature_superblob(data: bytes, stage: int = 1) -> None:
     if len(data) < 12 or len(data) > MAX_CODE_SIGNATURE_BYTES:
         _fail("invalid_code_signature")
     magic, declared_length, count = struct.unpack_from(">III", data, 0)
@@ -486,9 +584,11 @@ def _parse_signature_superblob(data: bytes) -> None:
             _fail("invalid_signed_entitlements")
         if _contains_prohibited_declaration(entitlements):
             _fail("app_group_signature_entitlement")
+        if stage == 3 and _contains_remote_notification_entitlement(entitlements):
+            _fail("remote_notifications_entitlement_present")
 
 
-def _inspect_macho_signature_slice(stream: Any, slice_size: int) -> int:
+def _inspect_macho_signature_slice(stream: Any, slice_size: int, stage: int = 1) -> int:
     magic = _I0._read_exact(stream, 4)
     if magic != b"\xcf\xfa\xed\xfe" or slice_size < 32:
         _fail("unsupported_signed_entitlements")
@@ -536,11 +636,15 @@ def _inspect_macho_signature_slice(stream: Any, slice_size: int) -> int:
     ):
         _fail("invalid_code_signature")
     _I0._skip_exact(stream, data_offset - command_end)
-    _parse_signature_superblob(_I0._read_exact(stream, data_size))
+    _parse_signature_superblob(_I0._read_exact(stream, data_size), stage)
     return data_offset + data_size
 
 
-def _inspect_macho_entitlements(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> None:
+def _inspect_macho_entitlements(
+    zf: zipfile.ZipFile,
+    info: zipfile.ZipInfo,
+    stage: int = 1,
+) -> None:
     if info.is_dir():
         return
     try:
@@ -548,7 +652,7 @@ def _inspect_macho_entitlements(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> N
             magic = _I0._read_exact(stream, 4)
             if magic == b"\xcf\xfa\xed\xfe":
                 stream.seek(0)
-                consumed = _inspect_macho_signature_slice(stream, info.file_size)
+                consumed = _inspect_macho_signature_slice(stream, info.file_size, stage)
                 _I0._skip_exact(stream, info.file_size - consumed)
                 return
             if magic not in _I0.FAT_MACHO_FORMATS:
@@ -560,7 +664,7 @@ def _inspect_macho_entitlements(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> N
                 if slice_offset < current_position:
                     _fail("invalid_macho")
                 _I0._skip_exact(stream, slice_offset - current_position)
-                consumed = _inspect_macho_signature_slice(stream, slice_size)
+                consumed = _inspect_macho_signature_slice(stream, slice_size, stage)
                 _I0._skip_exact(stream, slice_size - consumed)
                 current_position = slice_offset + slice_size
     except VerificationError:
@@ -652,6 +756,18 @@ def _validate_all_contents(
     _I0._validate_macho(zf, runner_info, 2)  # MH_EXECUTE, iPhoneOS arm64
     if stage == 2 and _contains_i2_debug_marker(zf, runner_info):
         _fail("fixture_entry_point_present")
+    if stage == 3:
+        if (
+            _contains_i2_debug_marker(zf, runner_info)
+            or _contains_i3_debug_marker(zf, runner_info)
+            or _contains_i3_debug_marker(
+                zf,
+                _I0._required_member(members, APP_FRAMEWORK_EXECUTABLE),
+            )
+        ):
+            _fail("fixture_entry_point_present")
+        if not _contains_all_binary_markers(zf, runner_info, I3_NOTIFICATION_WIRING_MARKERS):
+            _fail("notification_native_wiring_missing")
 
     framework_binaries = _validate_frameworks(zf, members, expected_revision)
     if APP_FRAMEWORK_EXECUTABLE not in framework_binaries:
@@ -661,7 +777,7 @@ def _validate_all_contents(
     for path, info in members.items():
         if path == "Payload/Runner.app" or path.startswith("Payload/Runner.app/"):
             if not info.is_dir() and _is_macho_magic(_read_prefix(zf, info)):
-                _inspect_macho_entitlements(zf, info)
+                _inspect_macho_entitlements(zf, info, stage)
     _I0._validate_archive_contents(zf, infos, declared_total)
 
 
@@ -676,9 +792,9 @@ def verify_package(
     *,
     stage: int = 1,
 ) -> dict[str, Any]:
-    """Verify an I1 or I2 unsigned IPA and return a path-free report."""
+    """Verify an I1, I2, or I3 unsigned IPA and return a path-free report."""
 
-    if type(stage) is not int or stage not in (1, 2):
+    if type(stage) is not int or stage not in (1, 2, 3):
         _fail("invalid_stage")
     if not _expected_revision_is_valid(expected_revision):
         _fail("invalid_expected_revision")
@@ -717,8 +833,16 @@ def verify_package(
         except (OSError, EOFError, RuntimeError, zipfile.BadZipFile, zipfile.LargeZipFile, ValueError, struct.error):
             _fail("invalid_ipa")
 
-    artifact_kind = "ios-i1-unsigned-ipa-v1" if stage == 1 else "ios-i2-unsigned-ipa-v1"
-    scope = "i1-storage-bootstrap" if stage == 1 else "i2-school-bridges"
+    artifact_kind = {
+        1: "ios-i1-unsigned-ipa-v1",
+        2: "ios-i2-unsigned-ipa-v1",
+        3: "ios-i3-unsigned-ipa-v1",
+    }[stage]
+    scope = {
+        1: "i1-storage-bootstrap",
+        2: "i2-school-bridges",
+        3: "i3-notifications-foreground",
+    }[stage]
     checks: dict[str, bool] = {
         "archivePathsAndSizes": True,
         "singleRunnerNoExtensionsOrPlugins": True,
@@ -731,6 +855,12 @@ def verify_package(
     if stage == 2:
         checks["fixedSchoolReadersMatchSource"] = True
         checks["noFixtureEntryPointsOrTransportOverrides"] = True
+    elif stage == 3:
+        checks["fixedSchoolReadersMatchSource"] = True
+        checks["noFixtureEntryPointsOrTransportOverrides"] = True
+        checks["notificationNativeWiringStringsPresent"] = True
+        checks["noI3FixtureMarkersInRunnerOrAOT"] = True
+        checks["noBackgroundModesOrRemoteNotificationsEntitlement"] = True
     report: dict[str, Any] = {
         "reportVersion": 1,
         "artifactKind": artifact_kind,

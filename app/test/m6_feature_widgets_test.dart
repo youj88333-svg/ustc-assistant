@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -71,6 +72,8 @@ void main() {
   testWidgets('system permission actions only run after the matching tap', (
     tester,
   ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     final data = _FakeReminderData();
     final briefs = _FakeBriefData();
     final actions = <NotificationAccessAction>[];
@@ -100,6 +103,7 @@ void main() {
       expect(actions, [entry.value]);
       actions.clear();
     }
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('system permission action guards duplicates and late results', (
@@ -169,11 +173,12 @@ void main() {
       _settingsHost(
         data,
         briefs,
-        runtime: const ReminderRuntimeView(
+        runtime: ReminderRuntimeView(
           accepted: 3,
           desired: 4,
           complete: false,
           throughDay: null,
+          registeredThroughUtc: DateTime.utc(2026, 10, 19, 6, 5),
           failure: ReminderFailureCode.publishFailed,
           capability: localCapability,
         ),
@@ -184,7 +189,99 @@ void main() {
     expect(find.textContaining('不代表 OS 队列独立枚举或通知已送达'), findsOneWidget);
     expect(find.textContaining('非精确提醒，可能延后'), findsOneWidget);
     expect(find.textContaining('系统报告应用退出后具备投递能力'), findsOneWidget);
+    expect(find.textContaining('C3期望范围尚未计算'), findsOneWidget);
+    expect(
+      find.textContaining('本地登记最晚时刻 2026-10-19 14:05（北京时间）'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('1 项期望提醒尚未登记'), findsOneWidget);
+    expect(find.textContaining('范围内每一天都有提醒'), findsOneWidget);
     expect(find.textContaining('系统已接受 3/4 项'), findsNothing);
+  });
+
+  testWidgets(
+    'iOS authorization restrictions are readable and omit exact alarms',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final data = _FakeReminderData();
+      final briefs = _FakeBriefData();
+      addTearDown(data.dispose);
+      addTearDown(briefs.dispose);
+      const capability = NotificationCapability(
+        available: true,
+        enabledBySystem: true,
+        schedulesAfterExit: true,
+        activationAvailable: true,
+        authorizationStatus: NotificationAuthorizationStatus.provisional,
+        alertsEnabled: false,
+        soundsEnabled: false,
+        lockScreenEnabled: false,
+        scheduledSummaryEnabled: true,
+        maximumPending: 60,
+      );
+
+      await tester.pumpWidget(
+        _settingsHost(
+          data,
+          briefs,
+          runtime: ReminderRuntimeView(
+            accepted: 1,
+            desired: 2,
+            throughDay: DateTime.utc(2026, 10, 20),
+            registeredThroughUtc: DateTime.utc(2026, 10, 19, 22),
+            capability: capability,
+          ),
+          configureSystemAccess: (_) async {},
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('通知可能静默送达'), findsOneWidget);
+      expect(find.textContaining('提醒横幅已关闭'), findsOneWidget);
+      expect(find.textContaining('提示音已关闭'), findsOneWidget);
+      expect(find.textContaining('锁定屏幕通知已关闭'), findsOneWidget);
+      expect(find.textContaining('通知摘要已启用'), findsOneWidget);
+      expect(find.byKey(const ValueKey('m6-system-exact')), findsNothing);
+      expect(find.textContaining('C3期望范围截至 2026-10-20'), findsOneWidget);
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets('iOS nullable authorization details stay unknown', (
+    tester,
+  ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final data = _FakeReminderData();
+    final briefs = _FakeBriefData();
+    addTearDown(data.dispose);
+    addTearDown(briefs.dispose);
+    const capability = NotificationCapability(
+      available: true,
+      enabledBySystem: true,
+      schedulesAfterExit: true,
+      activationAvailable: true,
+      authorizationStatus: NotificationAuthorizationStatus.notDetermined,
+      maximumPending: 60,
+    );
+
+    await tester.pumpWidget(
+      _settingsHost(
+        data,
+        briefs,
+        runtime: const ReminderRuntimeView(desired: 1, capability: capability),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('尚未决定是否允许通知'), findsOneWidget);
+    expect(find.textContaining('横幅已关闭'), findsNothing);
+    expect(find.textContaining('提示音已关闭'), findsNothing);
+    expect(find.textContaining('锁定屏幕通知已关闭'), findsNothing);
+    expect(find.textContaining('通知摘要已启用'), findsNothing);
+    expect(find.byKey(const ValueKey('m6-system-exact')), findsNothing);
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('OS queue evidence preserves the existing accepted wording', (
@@ -221,6 +318,8 @@ void main() {
   testWidgets('system access controls stay reachable at phone sizes and large text', (
     tester,
   ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     tester.view.devicePixelRatio = 1;
     for (final size in const [
       Size(320, 640),
@@ -262,6 +361,7 @@ void main() {
     }
     tester.view.resetPhysicalSize();
     tester.view.resetDevicePixelRatio();
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('timed reminder slot can be turned off and saved', (

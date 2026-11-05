@@ -19,7 +19,8 @@ final class YoungDailySyncCoordinator implements YoungDailySyncControlPort {
     this.checkInterval = const Duration(minutes: 1),
     this.jobTimeout = const Duration(minutes: 5),
     this.cancelOnBackground = false,
-  });
+    this.automaticAvailable = true,
+  }) : _view = YoungDailySyncView(automaticAvailable: automaticAvailable);
   final YoungDailySyncDataPort data;
   final YoungSyncPort source;
   final Future<void> Function(
@@ -30,12 +31,12 @@ final class YoungDailySyncCoordinator implements YoungDailySyncControlPort {
   final bool Function() isForegroundBusy, adviceOnly;
   final AppClock clock;
   final Duration checkInterval, jobTimeout;
-  final bool cancelOnBackground;
+  final bool cancelOnBackground, automaticAvailable;
   final _changes = StreamController<YoungDailySyncView>.broadcast();
   bool get isClosed => _closed;
   @override
   YoungDailySyncView get view => _view;
-  YoungDailySyncView _view = const YoungDailySyncView();
+  YoungDailySyncView _view;
   @override
   Stream<YoungDailySyncView> get changes => _changes.stream;
   YoungDailySyncSnapshot? _snapshot;
@@ -94,9 +95,7 @@ final class YoungDailySyncCoordinator implements YoungDailySyncControlPort {
   void _publish(YoungDailySyncPhase phase, {FailureCode? failure}) {
     if (_closed) return;
     final snapshot = _snapshot;
-    final decision = snapshot == null
-        ? null
-        : planYoungDailySync(snapshot, clock.nowUtc);
+    final decision = snapshot == null ? null : _decisionForView(snapshot);
     _view = YoungDailySyncView(
       enabled: snapshot?.enabled ?? false,
       phase: phase,
@@ -109,10 +108,101 @@ final class YoungDailySyncCoordinator implements YoungDailySyncControlPort {
       configured: snapshot?.accountBound ?? false,
       suppressedToday: snapshot?.suppressedDay == beijingDay(clock.nowUtc),
       interactive: _interactive && _ownsSource,
+      automaticAvailable: automaticAvailable,
       failure: failure,
     );
     _changes.add(_view);
   }
+
+  YoungDailySyncDecision _decisionForView(YoungDailySyncSnapshot snapshot) {
+    final now = clock.nowUtc;
+    final policy = planYoungDailySync(snapshot, now);
+    if (automaticAvailable ||
+        !snapshot.enabled ||
+        snapshot.adviceOnly ||
+        !snapshot.accountBound) {
+      return policy;
+    }
+
+    final beijingNow = now.add(const Duration(hours: 8));
+    final today = DateTime.utc(
+      beijingNow.year,
+      beijingNow.month,
+      beijingNow.day,
+    );
+    final firstDay = today.subtract(const Duration(days: 1));
+    final endDayExclusive = firstDay.add(const Duration(days: 31));
+    final todayAtSixUtc = DateTime.utc(
+      today.year,
+      today.month,
+      today.day,
+    ).subtract(const Duration(hours: 2));
+    final tomorrowAtSixUtc = todayAtSixUtc.add(const Duration(days: 1));
+
+    YoungDailySyncDecision decision(
+      YoungDailySyncPhase phase, {
+      DateTime? nextAttemptAtUtc,
+    }) => YoungDailySyncDecision(
+      firstDay: firstDay,
+      endDayExclusive: endDayExclusive,
+      phase: phase,
+      shouldRun: false,
+      nextAttemptAtUtc: nextAttemptAtUtc,
+    );
+
+    // The shared policy checks saved credentials before today's success. On
+    // iOS the daily check never uses those credentials, so preserve C3's
+    // persisted full-success fact independently of the credential flag.
+    if (_hasCurrentFullSuccess(snapshot, today, firstDay, endDayExclusive)) {
+      return decision(
+        YoungDailySyncPhase.done,
+        nextAttemptAtUtc: tomorrowAtSixUtc,
+      );
+    }
+    if (_sameDay(snapshot.suppressedDay, today)) {
+      return decision(
+        YoungDailySyncPhase.paused,
+        nextAttemptAtUtc: tomorrowAtSixUtc,
+      );
+    }
+    if (now.isBefore(todayAtSixUtc)) {
+      return decision(
+        YoungDailySyncPhase.scheduled,
+        nextAttemptAtUtc: todayAtSixUtc,
+      );
+    }
+    if (!_foreground) return decision(YoungDailySyncPhase.paused);
+    return decision(YoungDailySyncPhase.needsLogin);
+  }
+
+  bool _hasCurrentFullSuccess(
+    YoungDailySyncSnapshot snapshot,
+    DateTime today,
+    DateTime firstDay,
+    DateTime endDayExclusive,
+  ) {
+    final successAt = snapshot.lastSuccessAtUtc;
+    final successFirst = snapshot.successFirstDay;
+    final successEnd = snapshot.successEndDayExclusive;
+    if (successAt == null || successFirst == null || successEnd == null) {
+      return false;
+    }
+    final beijingSuccess = successAt.add(const Duration(hours: 8));
+    final successDay = DateTime.utc(
+      beijingSuccess.year,
+      beijingSuccess.month,
+      beijingSuccess.day,
+    );
+    return successDay == today &&
+        !_dateOnly(successFirst).isAfter(firstDay) &&
+        !_dateOnly(successEnd).isBefore(endDayExclusive);
+  }
+
+  bool _sameDay(DateTime? value, DateTime date) =>
+      value != null && _dateOnly(value) == date;
+
+  DateTime _dateOnly(DateTime value) =>
+      DateTime.utc(value.year, value.month, value.day);
 
   Future<void> check({bool manual = false}) async {
     if (_closed || _paused || _checking != null) return;
@@ -124,11 +214,13 @@ final class YoungDailySyncCoordinator implements YoungDailySyncControlPort {
       final snapshot = await data.inspect();
       if (_closed || _paused) return;
       _snapshot = snapshot;
-      final decision = planYoungDailySync(
-        snapshot,
-        clock.nowUtc,
-        manual: manual,
-      );
+      final decision = manual
+          ? planYoungDailySync(snapshot, clock.nowUtc, manual: true)
+          : _decisionForView(snapshot);
+      if (!manual && !automaticAvailable) {
+        _publish(decision.phase);
+        return;
+      }
       if (!decision.shouldRun) {
         _publish(decision.phase);
         return;
@@ -146,7 +238,7 @@ final class YoungDailySyncCoordinator implements YoungDailySyncControlPort {
       final grant = await data.claim(manual: manual);
       if (grant == null) {
         _snapshot = await data.inspect();
-        _publish(YoungDailySyncPhase.scheduled);
+        _publish(_decisionForView(_snapshot!).phase);
         return;
       }
       _grant = grant;
@@ -243,7 +335,7 @@ final class YoungDailySyncCoordinator implements YoungDailySyncControlPort {
         _ownsSource = false;
         _interactive = false;
         _snapshot = await data.inspect();
-        final decision = planYoungDailySync(_snapshot!, clock.nowUtc);
+        final decision = _decisionForView(_snapshot!);
         _publish(decision.phase, failure: _terminal?.failure);
         done.complete();
       } catch (error, stack) {
@@ -278,14 +370,19 @@ final class YoungDailySyncCoordinator implements YoungDailySyncControlPort {
       await saving;
     }
     _snapshot = await data.inspect();
-    _publish(
-      enabled ? YoungDailySyncPhase.scheduled : YoungDailySyncPhase.disabled,
-    );
+    _publish(_decisionForView(_snapshot!).phase);
     _schedule();
   }
 
   @override
-  Future<void> syncNow() => check(manual: true);
+  Future<void> syncNow() async {
+    if (!automaticAvailable) {
+      final checking = _checking;
+      if (checking != null) await checking;
+    }
+    await check(manual: true);
+  }
+
   @override
   Future<void> continueAfterLogin() async {
     if (!_interactive || !_ownsSource || _grant == null) {

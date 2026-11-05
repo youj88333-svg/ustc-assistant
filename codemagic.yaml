@@ -1,4 +1,24 @@
 workflows:
+  ios-i3-notifications:
+    name: iOS I3 - system reminders and foreground jobs
+    instance_type: mac_mini_m2
+    max_build_duration: 40
+    environment:
+      flutter: '3.47.7'
+      xcode: '27.1'
+    scripts:
+      - name: Validate I1-I2 prerequisites, OS reminders and I3 device AOT
+        script: bash tools/ios-i3/build.sh
+    artifacts:
+      - app/build/ios-i3/artifacts/ios-i3-unsigned.ipa
+      - app/build/ios-i3/artifacts/ios-i3-verification.json
+      - app/build/ios-i3/artifacts/ios-i3-provenance.json
+      - app/build/ios-i3/artifacts/*.log
+      - app/build/ios-i3/artifacts/*.txt
+      - app/build/ios-i3/artifacts/*.png
+      - app/build/ios-i3/artifacts/ios-i2-verification.json
+      - app/build/ios-i3/artifacts/ios-i2-pubspec.lock
+
   ios-i2-school:
     name: iOS I2 - manual school login and fixed collection
     instance_type: mac_mini_m2

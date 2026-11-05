@@ -262,9 +262,9 @@ class VerifyI2PackageTests(unittest.TestCase):
         ipa = self.ipa(aot_revision=False)
         self.assert_reason("aot_revision_missing", lambda: verifier.verify_package(ipa, REVISION))
 
-    def test_only_stage_one_or_two_is_accepted_by_shared_auditor(self) -> None:
+    def test_unknown_or_mistyped_stages_are_rejected_by_shared_auditor(self) -> None:
         ipa = self.ipa()
-        for stage in (0, 3, True, 2.0, "2"):
+        for stage in (0, 4, True, 2.0, "2"):
             with self.subTest(stage=stage):
                 self.assert_reason(
                     "invalid_stage",

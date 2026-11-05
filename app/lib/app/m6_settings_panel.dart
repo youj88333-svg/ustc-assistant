@@ -555,11 +555,13 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
                                 NotificationAccessAction.notifications,
                                 const ValueKey('m6-system-notifications'),
                               ),
-                              _systemAccessButton(
-                                '允许精确提醒',
-                                NotificationAccessAction.exactAlarms,
-                                const ValueKey('m6-system-exact'),
-                              ),
+                              if (defaultTargetPlatform ==
+                                  TargetPlatform.android)
+                                _systemAccessButton(
+                                  '允许精确提醒',
+                                  NotificationAccessAction.exactAlarms,
+                                  const ValueKey('m6-system-exact'),
+                                ),
                               _systemAccessButton(
                                 '系统通知设置',
                                 NotificationAccessAction.settings,
@@ -671,24 +673,34 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
 }
 
 String _queueStatus(ReminderRuntimeView view) {
-  final coverage = view.throughDay == null
-      ? '尚无覆盖日期'
-      : '实际覆盖至 ${_dateOnly(view.throughDay!)}';
   final localRegistration =
       view.capability?.queueEvidence ==
       NotificationQueueEvidence.localRegistration;
   final accepted = localRegistration ? '本地已登记' : '系统已接受';
+  final expected = view.throughDay == null
+      ? 'C3期望范围尚未计算'
+      : 'C3期望范围截至 ${_dateOnly(view.throughDay!)}';
+  final registered = view.registeredThroughUtc == null
+      ? '尚无可确认的已登记提醒'
+      : '${localRegistration ? '本地登记' : '系统队列已读回'}最晚时刻 '
+            '${_beijingDateTime(view.registeredThroughUtc!)}';
+  final unregistered = '${view.unregistered} 项期望提醒尚未登记';
   final evidenceNote = localRegistration
       ? ' 本地“已登记”数量表示本地登记及系统调用回执，不代表 OS 队列独立枚举或通知已送达。'
       : '';
-  if (view.busy) {
-    return '提醒队列正在同步；$accepted ${view.accepted}/${view.desired} 项。$coverage$evidenceNote';
-  }
-  final state = view.complete && view.failure == null ? '队列完整' : '覆盖尚未完整';
+  const coverageNote = '期望范围是投影边界，不表示范围内每一天都有提醒；同一时刻可合并，跳过或取消的项目不登记。';
   final failure = view.failure == null
       ? ''
       : '失败：${_reminderFailureLabel(view.failure!)}。';
-  return '$state；$accepted ${view.accepted}/${view.desired} 项；$coverage。$failure$evidenceNote';
+  if (view.busy) {
+    return '正在同步提醒队列；$accepted ${view.accepted}/${view.desired} 项；'
+        '$expected；$registered；$unregistered。$failure$coverageNote$evidenceNote';
+  }
+  final state = view.complete && view.failure == null
+      ? '当前期望项均已登记'
+      : '当前期望项尚未全部登记';
+  return '$state；$accepted ${view.accepted}/${view.desired} 项；'
+      '$expected；$registered；$unregistered。$failure$coverageNote$evidenceNote';
 }
 
 String _reminderFailureLabel(ReminderFailureCode code) => switch (code) {
@@ -706,27 +718,54 @@ String _reminderFailureLabel(ReminderFailureCode code) => switch (code) {
 
 String _capabilityStatus(NotificationCapability capability) {
   if (!capability.available) return '此设备暂不支持系统提醒。';
-  if (capability.queueEvidence == NotificationQueueEvidence.operatingSystem &&
-      capability.exactScheduling == null) {
-    if (!capability.enabledBySystem) return '系统通知当前未开启。';
-    if (!capability.schedulesAfterExit) return '系统退出后投递能力尚未确认。';
-    return '系统通知已开启。';
+  final hasAuthorizationStatus =
+      capability.authorizationStatus != NotificationAuthorizationStatus.unknown;
+  final status = <String>[];
+  if (hasAuthorizationStatus) {
+    status.add(switch (capability.authorizationStatus) {
+      NotificationAuthorizationStatus.unknown => '',
+      NotificationAuthorizationStatus.notDetermined => '尚未决定是否允许通知。',
+      NotificationAuthorizationStatus.denied => '通知权限已拒绝。',
+      NotificationAuthorizationStatus.authorized => '通知权限已允许。',
+      NotificationAuthorizationStatus.provisional => '通知可能静默送达。',
+      NotificationAuthorizationStatus.ephemeral => '当前为临时通知授权。',
+    });
   }
-  final status = <String>[
-    capability.enabledBySystem ? '系统通知已开启。' : '系统通知当前未开启。',
-  ];
+  final osQueue =
+      capability.queueEvidence == NotificationQueueEvidence.operatingSystem;
+  final legacyOsStatus =
+      osQueue && capability.exactScheduling == null && !hasAuthorizationStatus;
+  if (legacyOsStatus) {
+    if (!capability.enabledBySystem) {
+      status.add('系统通知当前未开启。');
+    } else if (!capability.schedulesAfterExit) {
+      status.add('系统退出后投递能力尚未确认。');
+    } else {
+      status.add('系统通知已开启。');
+    }
+  } else if (!hasAuthorizationStatus || !osQueue) {
+    status.add(capability.enabledBySystem ? '系统通知已开启。' : '系统通知当前未开启。');
+  }
   if (capability.exactScheduling == false) {
     status.add('精确提醒未获授权，目前为非精确提醒，可能延后。');
   } else if (capability.exactScheduling == true) {
     status.add('系统已允许精确提醒，但仍可能延迟，也不能保证你一定看到通知。');
   }
-  status.add(
-    capability.schedulesAfterExit
-        ? '系统报告应用退出后具备投递能力，实际投递仍受系统管理。'
-        : '应用退出后的提醒能力尚未确认。',
-  );
+  if ((!osQueue || !hasAuthorizationStatus) && !legacyOsStatus) {
+    status.add(
+      capability.schedulesAfterExit
+          ? '系统报告应用退出后具备投递能力，实际投递仍受系统管理。'
+          : '应用退出后的提醒能力尚未确认。',
+    );
+  }
   if (!capability.activationAvailable) {
     status.add('通知点击后返回应用的能力尚未确认。');
+  }
+  if (capability.alertsEnabled == false) status.add('提醒横幅已关闭。');
+  if (capability.soundsEnabled == false) status.add('提示音已关闭。');
+  if (capability.lockScreenEnabled == false) status.add('锁定屏幕通知已关闭。');
+  if (capability.scheduledSummaryEnabled == true) {
+    status.add('通知摘要已启用，展示时间由系统安排。');
   }
   return status.join(' ');
 }
@@ -774,3 +813,9 @@ String _dateOnly(DateTime value) =>
     '${value.year.toString().padLeft(4, '0')}-'
     '${value.month.toString().padLeft(2, '0')}-'
     '${value.day.toString().padLeft(2, '0')}';
+
+String _beijingDateTime(DateTime utc) {
+  final value = utc.toUtc().add(const Duration(hours: 8));
+  return '${_dateOnly(value)} ${value.hour.toString().padLeft(2, '0')}:'
+      '${value.minute.toString().padLeft(2, '0')}（北京时间）';
+}

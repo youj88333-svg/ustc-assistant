@@ -9,6 +9,15 @@ import UIKit
   private var hasBeenActive = false
   private var lifetimeObservers: [NSObjectProtocol] = []
   private var schoolBridge: AnyObject?
+  private let notificationBridge = IOSNotificationBridge()
+
+  override func application(_ application: UIApplication,
+                            didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+    // Install before launch finishes so a notification tap may be retained even
+    // before Flutter has initialized its channel or subscribed to activations.
+    notificationBridge.installDelegate()
+    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
 
   private func installLifetimeObservers() {
     guard lifetimeObservers.isEmpty else { return }
@@ -42,6 +51,7 @@ import UIKit
     installLifetimeObservers()
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     let messenger = engineBridge.applicationRegistrar.messenger()
+    notificationBridge.attach(messenger: messenger)
     if #available(iOS 27.0, *) {
       (schoolBridge as? IOSObservationBridge)?.shutdown()
       schoolBridge = IOSObservationBridge(messenger: messenger, presenter: { [weak self] in
@@ -73,6 +83,11 @@ import UIKit
           "revision": Bundle.main.object(forInfoDictionaryKey: "I2SourceRevision") as? String ?? "unknown",
           "bundleId": Bundle.main.bundleIdentifier ?? "unknown",
           "authentication": "manual", "schoolStore": "wk-uuid-v1"
+        ])
+        case "i3BuildInfo": reply([
+          "revision": Bundle.main.object(forInfoDictionaryKey: "I3SourceRevision") as? String ?? "unknown",
+          "bundleId": Bundle.main.bundleIdentifier ?? "unknown",
+          "authentication": "manual", "notificationBackend": "user-notifications-v1"
         ])
         case "i2BrowserDiagnostics":
           if #available(iOS 27.0, *), let bridge = self?.schoolBridge as? IOSObservationBridge {

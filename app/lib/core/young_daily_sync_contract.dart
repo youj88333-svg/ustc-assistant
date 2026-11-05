@@ -97,8 +97,14 @@ final class YoungDailySyncView {
     this.configured = false,
     this.suppressedToday = false,
     this.interactive = false,
+    this.automaticAvailable = true,
   });
-  final bool enabled, adviceOnly, configured, suppressedToday, interactive;
+  final bool enabled,
+      adviceOnly,
+      configured,
+      suppressedToday,
+      interactive,
+      automaticAvailable;
   final YoungDailySyncPhase phase;
   final DateTime? lastSuccessAtUtc, firstDay, endDayExclusive, nextAttemptAtUtc;
   final int attempts;
