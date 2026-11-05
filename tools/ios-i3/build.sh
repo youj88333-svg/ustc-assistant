@@ -32,7 +32,7 @@ simulator="$(xcrun simctl create USTC-I3-synthetic "$device_type" "$runtime")"
 trap 'xcrun simctl shutdown "$simulator" >/dev/null 2>&1 || true; xcrun simctl delete "$simulator" >/dev/null 2>&1 || true' EXIT
 xcrun simctl boot "$simulator"
 xcrun simctl bootstatus "$simulator" -b
-flutter test --no-pub integration_test/ios_i3_notifications_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" 2>&1 | tee "$output/i3-notifications-test.log"
+flutter test --no-pub --no-uninstall integration_test/ios_i3_notifications_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" 2>&1 | tee "$output/i3-notifications-test.log"
 # Separate UI journey preserves this job's synthetic installation and no HTTP.
 flutter test --no-pub --no-uninstall integration_test/ios_i3_workspace_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" 2>&1 | tee "$output/i3-workspace-test.log"
 synthetic_container="$(xcrun simctl get_app_container "$simulator" cn.ustcassistant.ios.private data)"
