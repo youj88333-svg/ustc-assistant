@@ -56,6 +56,7 @@ void main() {
           ).timeout(_operationTimeout),
         ))!;
         capturedBootstrap = opened;
+        debugPrint('I3 workspace: owned runtime opened');
         await tester.pumpWidget(
           RepaintBoundary(
             key: captureKey,
@@ -106,6 +107,7 @@ void main() {
           runtime,
           'i3-workspace.png',
         );
+        debugPrint('I3 workspace: schedule and task entry rendered');
 
         final reminderSettings = await tester.runAsync(
           runtime.jwStore.features.inspectReminders,
@@ -141,6 +143,7 @@ void main() {
         expect(find.byIcon(Icons.mic_none_rounded), findsNothing);
         expect(tester.takeException(), isNull);
 
+        debugPrint('I3 workspace: manual source panels verified');
         await _waitForReminderReadback(tester, runtime);
         await tester.tap(find.text('提醒').last);
         await _pumpUntil(
@@ -192,6 +195,7 @@ void main() {
         expect(find.byType(AgentWorkspacePage), findsNothing);
         expect(find.byIcon(Icons.mic_none_rounded), findsNothing);
         expect(tester.takeException(), isNull);
+        debugPrint('I3 workspace: system queue rendered at larger text size');
 
         // Exercise a valid iOS lifecycle sequence. It pauses foreground-only
         // automatic work and returns to the same owner without reopening it.
@@ -201,19 +205,24 @@ void main() {
         await _pumpFrames(tester, count: 2);
         _expectForegroundAutomaticWorkStopped(runtime);
         tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-        await _pumpFrames(tester, count: 2);
         tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-        await _pumpFrames(tester, count: 2);
-        _expectForegroundAutomaticWorkStopped(runtime);
-        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
-        await _pumpFrames(tester, count: 2);
-        tester.binding.handleAppLifecycleStateChanged(
-          AppLifecycleState.inactive,
-        );
-        await _pumpFrames(tester, count: 2);
-        tester.binding.handleAppLifecycleStateChanged(
-          AppLifecycleState.resumed,
-        );
+        try {
+          // A live binding's pump waits for an engine frame. The scheduler
+          // disables those frames while hidden/paused; inspect state directly
+          // and resume before requesting another frame.
+          expect(tester.binding.framesEnabled, isFalse);
+          _expectForegroundAutomaticWorkStopped(runtime);
+        } finally {
+          tester.binding.handleAppLifecycleStateChanged(
+            AppLifecycleState.hidden,
+          );
+          tester.binding.handleAppLifecycleStateChanged(
+            AppLifecycleState.inactive,
+          );
+          tester.binding.handleAppLifecycleStateChanged(
+            AppLifecycleState.resumed,
+          );
+        }
         await _pumpFrames(tester);
         expect(bootstrapOpenCount, 1);
         expect(identical(bootstrap.runtime, runtime), isTrue);
@@ -221,6 +230,7 @@ void main() {
         expect(runtime.jwSync.syncView.busy, isFalse);
         expect(runtime.youngSync.syncView.busy, isFalse);
         expect(tester.takeException(), isNull);
+        debugPrint('I3 workspace: resumed with the same owner');
 
         binding.reportData = <String, Object>{
           'i3WorkspaceNavigation': true,
