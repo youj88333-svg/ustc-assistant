@@ -221,8 +221,12 @@ void main() {
           find.byKey(const ValueKey('diagnostics-export-button')),
         );
         Map<String, Object?>? exportState;
-        for (var attempt = 0; attempt < 40; attempt++) {
+        final exportWait = Stopwatch()..start();
+        while (exportWait.elapsed < _operationTimeout) {
           await _pumpFrames(tester, count: 1);
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 150)),
+          );
           exportState = await tester.runAsync(_inspectExport);
           if (exportState?['presented'] == true) break;
         }

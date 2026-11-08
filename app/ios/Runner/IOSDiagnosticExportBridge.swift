@@ -106,17 +106,18 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
     picker.modalPresentationStyle = .formSheet
     let next = ExportFlight(reply: reply, artifact: artifact, picker: picker)
     flight = next
-    host.present(picker, animated: true) { [weak self, weak next, weak picker] in
+    // Match the existing school-window bridge: do not make handoff/cleanup
+    // depend on an animation completing while Flutter owns the live frame loop.
+    host.present(picker, animated: false) { [weak self, weak next, weak picker] in
       guard let self, let next, let picker, self.flight === next else { return }
-      guard picker.presentingViewController === host,
-            picker.viewIfLoaded?.window != nil else {
+      guard picker.presentingViewController != nil else {
         self.finish(next, response: .failure("closed"))
         return
       }
-      next.presented = true
       self.exportStep = .presented
       picker.presentationController?.delegate = self
     }
+    picker.presentationController?.delegate = self
   }
 
   private func onMain(_ action: @escaping () -> Void) {
@@ -140,7 +141,7 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
       return
     }
     if picker.presentingViewController != nil && !picker.isBeingDismissed {
-      picker.dismiss(animated: true, completion: dismissed)
+      picker.dismiss(animated: false, completion: dismissed)
       return
     }
     if picker.isBeingDismissed, let transition = picker.transitionCoordinator {
@@ -164,7 +165,7 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
         finishDismissalWait(active, response: response)
       }
     } else if picker.presentingViewController != nil {
-      picker.dismiss(animated: true) { [self, active] in
+      picker.dismiss(animated: false) { [self, active] in
         completeAfterDismissal(active, response: response)
       }
     } else {
@@ -535,7 +536,9 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
     case "inspect":
       let active = flight
       reply([
-        "presented": active?.presented == true,
+        "presented": active != nil && active?.finishing == false
+          && active?.picker?.presentingViewController != nil
+          && active?.picker?.viewIfLoaded?.window != nil,
         "tempFilePresent": active.map { temporaryFilePresent($0.artifact) } ?? false,
         "busy": active != nil
       ])
@@ -567,7 +570,6 @@ private final class ExportFlight {
   let reply: FlutterResult
   let artifact: ExportArtifact
   let picker: UIDocumentPickerViewController?
-  var presented = false
   var finishing = false
   var completed = false
   var afterDismissal: [() -> Void] = []
