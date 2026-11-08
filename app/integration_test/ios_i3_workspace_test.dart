@@ -226,6 +226,16 @@ void main() {
           exportState = await tester.runAsync(_inspectExport);
           if (exportState?['presented'] == true) break;
         }
+        if (exportState?['presented'] != true) {
+          final stage = await tester.runAsync(
+            () => _exportChannel
+                .invokeMethod<String>('i3ExportFixture', {
+                  'action': 'failureStage',
+                })
+                .timeout(_operationTimeout),
+          );
+          debugPrint('I3 workspace: native export stopped at $stage');
+        }
         expect(exportState, {
           'presented': true,
           'tempFilePresent': true,
@@ -250,6 +260,7 @@ void main() {
           'busy': false,
         });
         expect(find.text('日志已导出，请自行发送给维护者。'), findsNothing);
+        expect(find.text('未能导出日志，请稍后重试。'), findsNothing);
         expect(tester.takeException(), isNull);
         debugPrint(
           'I3 workspace: native export sheet, single flight and cancel cleanup verified',
@@ -296,6 +307,7 @@ void main() {
           'i3LifecycleSingleOwner': true,
           'i3DenseSevenDayCalendar': true,
           'i3NativeExportPresentationAndCancelCleanup': true,
+          'i3ExportDataProtectionRequiresPhysicalDevice': true,
           'phoneLogicalWidth': logicalWidth,
           'bootstrapOpenCount': bootstrapOpenCount,
           'reminderQueueAccepted': runtime.reminders.view.accepted,

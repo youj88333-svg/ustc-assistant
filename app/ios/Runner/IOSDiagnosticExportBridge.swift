@@ -17,6 +17,7 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
   private let presenter: () -> UIViewController?
   private var flight: ExportFlight?
   private var isShutdown = false
+  private var exportStep = IOSDiagnosticExportStep.idle
 
   init(messenger: FlutterBinaryMessenger, presenter: @escaping () -> UIViewController?) {
     self.presenter = presenter
@@ -56,6 +57,7 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
   }
 
   private func save(_ arguments: Any?, reply: @escaping FlutterResult) {
+    exportStep = .input
     guard let raw = arguments as? [String: Any],
           Set(raw.keys) == Set(["contents"]),
           let contents = raw["contents"] as? String else {
@@ -79,6 +81,7 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
       reply(Self.failure("closed"))
       return
     }
+    exportStep = .presenter
     guard UIApplication.shared.applicationState == .active,
           let host = presenter(),
           host.viewIfLoaded?.window != nil,
@@ -98,6 +101,7 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
     }
 
     let picker = UIDocumentPickerViewController(forExporting: [artifact.url], asCopy: true)
+    exportStep = .presenting
     picker.delegate = self
     picker.modalPresentationStyle = .formSheet
     let next = ExportFlight(reply: reply, artifact: artifact, picker: picker)
@@ -110,6 +114,7 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
         return
       }
       next.presented = true
+      self.exportStep = .presented
       picker.presentationController?.delegate = self
     }
   }
@@ -208,6 +213,7 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
   // Uses only Foundation's app tmp directory, one fixed child, and one fixed
   // filename. openat/O_NOFOLLOW and inode checks keep cleanup scoped to our file.
   private func stage(_ data: Data) throws -> ExportArtifact {
+    exportStep = .temporaryRoot
     let root = FileManager.default.temporaryDirectory.standardizedFileURL
     let expectedRoot = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
       .appendingPathComponent("tmp", isDirectory: true).standardizedFileURL
@@ -227,19 +233,24 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
 
     var rootStat = stat()
     var expectedRootStat = stat()
+    // Foundation owns the app's system tmp directory; its POSIX mode is not
+    // required to equal a directory we create. Bind both system-provided paths
+    // to the same owned inode and reject shared write access. The fixed child
+    // below must still be 0700, and the export file must be 0600.
     guard fstat(rootFD, &rootStat) == 0,
           fstat(expectedRootFD, &expectedRootStat) == 0,
           isDirectory(rootStat),
           rootStat.st_uid == geteuid(),
-          (rootStat.st_mode & mode_t(0o077)) == 0,
+          (rootStat.st_mode & mode_t(0o022)) == 0,
           isDirectory(expectedRootStat),
           expectedRootStat.st_uid == geteuid(),
-          (expectedRootStat.st_mode & mode_t(0o077)) == 0,
+          (expectedRootStat.st_mode & mode_t(0o022)) == 0,
           rootStat.st_dev == expectedRootStat.st_dev,
           rootStat.st_ino == expectedRootStat.st_ino else {
       throw IOSDiagnosticExportFailure.exportFailed
     }
 
+    exportStep = .directory
     let madeDirectory = Self.temporaryDirectoryName.withCString {
       Darwin.mkdirat(rootFD, $0, mode_t(0o700))
     }
@@ -266,6 +277,7 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
     }
 
     let directoryURL = root.appendingPathComponent(Self.temporaryDirectoryName, isDirectory: true)
+    exportStep = .fileProtection
     do {
       try FileManager.default.setAttributes(
         [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
@@ -299,6 +311,7 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
       throw IOSDiagnosticExportFailure.exportFailed
     }
 
+    exportStep = .creatingFile
     let fileFD = Self.temporaryFilename.withCString {
       Darwin.openat(
         directoryFD,
@@ -345,12 +358,14 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
       throw IOSDiagnosticExportFailure.exportFailed
     }
 
+    exportStep = .writing
     try writeAll(data, to: fileFD)
     guard fsync(fileFD) == 0, lseek(fileFD, 0, SEEK_SET) == 0 else {
       throw IOSDiagnosticExportFailure.exportFailed
     }
 
     let fileURL = directoryURL.appendingPathComponent(Self.temporaryFilename, isDirectory: false)
+    exportStep = .fileProtection
     do {
       try FileManager.default.setAttributes(
         [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
@@ -363,6 +378,7 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
       throw IOSDiagnosticExportFailure.exportFailed
     }
 
+    exportStep = .verifyingFile
     var finalStat = stat()
     var namedStat = stat()
     guard fstat(fileFD, &finalStat) == 0,
@@ -424,12 +440,20 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
   }
 
   private func hasClassCProtection(_ url: URL) -> Bool {
+    #if targetEnvironment(simulator)
+    // Simulator does not expose the device Data Protection class (also kept as
+    // a physical-device requirement in the I1 storage checks). We still request
+    // Class C and enforce private ownership/modes, but do not claim hardware
+    // protection was verified by a Simulator file-picker journey.
+    return true
+    #else
     guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else {
       return false
     }
     let protection = (attributes[.protectionKey] as? String)
       ?? (attributes[.protectionKey] as? FileProtectionType)?.rawValue
     return protection == FileProtectionType.completeUntilFirstUserAuthentication.rawValue
+    #endif
   }
 
   private func unlinkIfMatching(directoryFD: Int32, device: dev_t, inode: ino_t) -> Bool {
@@ -506,6 +530,8 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
       return
     }
     switch action {
+    case "failureStage":
+      reply(exportStep.rawValue)
     case "inspect":
       let active = flight
       reply([
@@ -525,6 +551,11 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
     }
   }
   #endif
+}
+
+private enum IOSDiagnosticExportStep: String {
+  case idle, input, presenter, temporaryRoot, directory, fileProtection
+  case creatingFile, writing, verifyingFile, presenting, presented
 }
 
 private enum ExportResponse {

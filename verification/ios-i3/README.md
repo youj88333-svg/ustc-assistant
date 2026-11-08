@@ -10,6 +10,8 @@
 
 日志复用本地安全白名单，iOS 顶栏通过系统文件导出窗口保存，不自动上传。`IOSDiagnosticExportPolicy.swift` 与 `export_policy_main.swift` 检查固定封套、类型和体积；工作区集成检查实际原生窗口展示、单次导出和取消后临时文件清理。保存到用户所选位置的最终手势仍由目标手机验证。新包声明 `diagnosticExport=system-documents-v1` 时额外核验系统文件导出接线，Release 不得包含 `i3ExportFixture`。
 
+系统 tmp 以 Foundation 与当前应用容器固定路径的同一 owner/inode 为锚点，禁止共享写入；自建子目录 0700、文件 0600。设备严格回读 Class C 保护；Simulator 不提供实机 Data Protection 证明，单独验证文件窗口和清理。Debug Simulator 可查询闭合的导出失败阶段，不返回路径或系统错误原文。
+
 ## 执行
 
 在 macOS 的受控一次性工作区，运行 `bash tools/ios-i3/build.sh`。入口锁定既定 Flutter/Xcode，并运行当前修订的完整 I1/I2 前置检查、原生策略、共享作业、I3 Simulator 和单 Runner 设备 Release/AOT；不接物理设备、Apple 账号、学校或真实模型。Codemagic 的 `ios-i3-notifications` 采用手动、有界免费工作流。
