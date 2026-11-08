@@ -10,6 +10,7 @@ import UIKit
   private var lifetimeObservers: [NSObjectProtocol] = []
   private var schoolBridge: AnyObject?
   private let notificationBridge = IOSNotificationBridge()
+  private var diagnosticExportBridge: IOSDiagnosticExportBridge?
 
   override func application(_ application: UIApplication,
                             didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
@@ -52,6 +53,12 @@ import UIKit
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     let messenger = engineBridge.applicationRegistrar.messenger()
     notificationBridge.attach(messenger: messenger)
+    diagnosticExportBridge?.shutdown()
+    diagnosticExportBridge = IOSDiagnosticExportBridge(messenger: messenger, presenter: { [weak self] in
+      self?.window?.rootViewController ?? UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        .first(where: \.isKeyWindow)?.rootViewController
+    })
     if #available(iOS 27.0, *) {
       (schoolBridge as? IOSObservationBridge)?.shutdown()
       schoolBridge = IOSObservationBridge(messenger: messenger, presenter: { [weak self] in

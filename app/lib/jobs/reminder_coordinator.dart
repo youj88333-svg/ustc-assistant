@@ -36,7 +36,10 @@ final class ReminderCoordinator {
       _initialized = false,
       _closing = false;
   int _generation = 0;
-  Timer? _timer, _rollTimer;
+  Timer? _timer, _rollTimer, _testRefillTimer;
+  DiagnosticNotificationStep _diagnosticStep =
+      DiagnosticNotificationStep.preparing;
+  int? _diagnosticPending, _diagnosticDesired, _diagnosticAccepted;
   ReminderPublication? _lastPublication;
   NotificationCapability? _capability;
   final _waitingNavigation = <NotificationActivation>[];
@@ -315,6 +318,8 @@ final class ReminderCoordinator {
             DiagnosticEventName.reminderFailed,
             DiagnosticOutcome.failure,
             failure.name,
+            operation: DiagnosticNotificationOperation.reconcile,
+            failure: error is ReminderFailure ? error : null,
           );
           _again = false;
         }
@@ -329,6 +334,10 @@ final class ReminderCoordinator {
   bool _live(int generation) =>
       !_closed && !_paused && generation == _generation;
   Future<void> _reconcile(int generation) async {
+    _diagnosticStep = DiagnosticNotificationStep.preparing;
+    _diagnosticPending = null;
+    _diagnosticDesired = null;
+    _diagnosticAccepted = null;
     _publish(
       busy: true,
       accepted: _view.accepted,
@@ -339,26 +348,33 @@ final class ReminderCoordinator {
       failure: _view.failure,
     );
     final publication = await data.prepareReminderPublication();
+    _diagnosticDesired = publication.desired.length;
     if (!_live(generation)) return;
     _lastPublication = publication;
     if (!publication.enabled && publication.prior.isEmpty && !_initialized) {
       _publish(complete: true, through: publication.throughDay);
       return;
     }
+    _diagnosticStep = DiagnosticNotificationStep.permissions;
     await _ensurePlatform();
     if (!_live(generation) ||
         !await data.reminderPublicationCurrent(publication)) {
       _again = true;
       return;
     }
+    _diagnosticStep = DiagnosticNotificationStep.binding;
     await _bind(publication);
     if (!_live(generation)) return;
     _log(
       DiagnosticEventName.reminderReconcileStarted,
       DiagnosticOutcome.started,
       null,
+      operation: DiagnosticNotificationOperation.reconcile,
     );
+    _diagnosticStep = DiagnosticNotificationStep.readingQueue;
     final actual = await platform.pending();
+    _diagnosticPending = actual.length;
+    _diagnosticAccepted = confirmedCount(publication.desired, actual);
     final desired = {for (final m in publication.desired) m.request.id: m};
     final preserved = publication.prior.map((m) => m.request.id).toSet()
       ..removeAll(publication.invalidPriorIds);
@@ -375,7 +391,9 @@ final class ReminderCoordinator {
     final retained = actual
         .where(
           (item) =>
-              !desired.containsKey(item.id) && preserved.contains(item.id),
+              !desired.containsKey(item.id) &&
+              (preserved.contains(item.id) ||
+                  publication.enabled && _activeTest(item)),
         )
         .length;
     final slotCount = max(0, capacity - retained).toInt();
@@ -385,7 +403,9 @@ final class ReminderCoordinator {
         .where(
           (a) =>
               publication.invalidPriorIds.contains(a.id) ||
-              !desired.containsKey(a.id) && !preserved.contains(a.id) ||
+              !desired.containsKey(a.id) &&
+                  !preserved.contains(a.id) &&
+                  !(publication.enabled && _activeTest(a)) ||
               desired.containsKey(a.id) &&
                   (!selectedIds.contains(a.id) ||
                       !a.matches(desired[a.id]!.request)),
@@ -400,12 +420,18 @@ final class ReminderCoordinator {
         _again = true;
         return;
       }
+      _diagnosticStep = DiagnosticNotificationStep.makingSpace;
       await platform.cancel(id);
       await data.recordReminderCancelled(id);
     }
     // Verify canceled queue entries before using the released slots. A native
     // acknowledgement without readback cannot prove the near-term request fits.
     final afterCancel = await platform.pending();
+    _diagnosticPending = afterCancel.length;
+    _diagnosticAccepted = confirmedCount(publication.desired, afterCancel);
+    for (final test in afterCancel.where(_activeTest)) {
+      _scheduleTestRefill(test.deliveryAtUtc);
+    }
     if (afterCancel.any((item) => remove.contains(item.id))) {
       throw const ReminderFailure(ReminderFailureCode.cancelFailed);
     }
@@ -465,6 +491,7 @@ final class ReminderCoordinator {
         complete = false;
         break;
       }
+      _diagnosticStep = DiagnosticNotificationStep.registering;
       await platform.schedule(mapping.request);
       if (!_live(generation) ||
           !await data.reminderPublicationCurrent(publication)) {
@@ -475,7 +502,10 @@ final class ReminderCoordinator {
       }
       // Windows reads its OS queue; Android confirms durable local registration
       // plus a successful AlarmManager call. Neither proves actual delivery.
+      _diagnosticStep = DiagnosticNotificationStep.verifying;
       final verifiedQueue = await platform.pending();
+      _diagnosticPending = verifiedQueue.length;
+      _diagnosticAccepted = confirmedCount(publication.desired, verifiedQueue);
       final verified = verifiedQueue
           .where((p) => p.id == mapping.request.id)
           .toList();
@@ -491,9 +521,11 @@ final class ReminderCoordinator {
       accepted = confirmedCount(selected, pending);
       registeredThroughUtc = latestDueTime(pending);
       publishProgress();
+      _diagnosticStep = DiagnosticNotificationStep.recording;
       await data.recordReminderAccepted(publication, mapping.request.id);
     }
     if (_live(generation)) {
+      _diagnosticStep = DiagnosticNotificationStep.completed;
       final finishedComplete =
           complete && accepted == publication.desired.length;
       _publish(
@@ -509,6 +541,7 @@ final class ReminderCoordinator {
             ? DiagnosticOutcome.complete
             : DiagnosticOutcome.truncated,
         null,
+        operation: DiagnosticNotificationOperation.reconcile,
       );
     }
   }
@@ -545,6 +578,7 @@ final class ReminderCoordinator {
     _cancelNavigationRetry();
     _timer?.cancel();
     _rollTimer?.cancel();
+    _testRefillTimer?.cancel();
     await _work;
     if (!_initialized && !nativeCleanupRequired) {
       _publish(complete: true);
@@ -569,6 +603,7 @@ final class ReminderCoordinator {
     _cancelNavigationRetry();
     _timer?.cancel();
     _rollTimer?.cancel();
+    _testRefillTimer?.cancel();
     await _work;
     final control = platform;
     if (control is NotificationPublicationControlPort) {
@@ -587,25 +622,95 @@ final class ReminderCoordinator {
   }
 
   /// Explicit user-operated OS check. It contains no business data and grants
-  /// no navigable target; ordinary reconciliation treats it as an orphan.
+  /// no navigable target. Its short-lived OS slot is refilled after it expires.
   Future<void> testNotification() async {
     if (_closed || _paused || _closing || _work != null) {
       throw const ReminderFailure(ReminderFailureCode.maintenance);
     }
-    if (!(await data.inspectReminders()).preferences.enabled) {
-      throw const ReminderFailure(ReminderFailureCode.disabledBySystem);
-    }
     final done = Completer<void>();
     _work = done.future;
+    var releasedSlot = false;
+    var testRegistered = false;
+    _diagnosticStep = DiagnosticNotificationStep.preparing;
+    _diagnosticPending = null;
+    _diagnosticDesired = null;
+    _diagnosticAccepted = null;
+    _log(
+      DiagnosticEventName.reminderTestStarted,
+      DiagnosticOutcome.started,
+      null,
+      operation: DiagnosticNotificationOperation.test,
+    );
     try {
+      if (!(await data.inspectReminders()).preferences.enabled) {
+        throw const ReminderFailure(ReminderFailureCode.disabledBySystem);
+      }
+      _diagnosticStep = DiagnosticNotificationStep.permissions;
       await _ensurePlatform();
       final publication = await data.prepareReminderPublication();
+      _diagnosticDesired = publication.desired.length;
       if (_paused || !await data.reminderPublicationCurrent(publication)) {
         throw const ReminderFailure(ReminderFailureCode.stale);
       }
+      _diagnosticStep = DiagnosticNotificationStep.binding;
       await _bind(publication);
       if (_capability?.enabledBySystem != true) {
         throw const ReminderFailure(ReminderFailureCode.disabledBySystem);
+      }
+      _diagnosticStep = DiagnosticNotificationStep.readingQueue;
+      await platform.cancel('m6-check');
+      var pending = await platform.pending();
+      _diagnosticPending = pending.length;
+      _diagnosticAccepted = confirmedCount(publication.desired, pending);
+      final capacity = (_capability?.maximumPending ?? 512)
+          .clamp(1, 512)
+          .toInt();
+      if (pending.length >= capacity) {
+        final known = {
+          for (final mapping in publication.desired)
+            mapping.request.id: mapping.request,
+        };
+        final candidates =
+            pending
+                .where(
+                  (item) =>
+                      known[item.id] != null &&
+                      item.matches(known[item.id]!) &&
+                      item.deliveryAtUtc.isAfter(
+                        clock.nowUtc.add(const Duration(seconds: 15)),
+                      ) &&
+                      !publication.invalidPriorIds.contains(item.id),
+                )
+                .toList()
+              ..sort(
+                (left, right) =>
+                    right.deliveryAtUtc.compareTo(left.deliveryAtUtc),
+              );
+        if (pending.length != capacity || candidates.isEmpty) {
+          throw const ReminderFailure(ReminderFailureCode.capacityReached);
+        }
+        if (_paused ||
+            _closing ||
+            !await data.reminderPublicationCurrent(publication)) {
+          throw const ReminderFailure(ReminderFailureCode.stale);
+        }
+        final victim = candidates.first;
+        _diagnosticStep = DiagnosticNotificationStep.makingSpace;
+        releasedSlot = true;
+        await platform.cancel(victim.id);
+        await data.recordReminderCancelled(victim.id);
+        pending = await platform.pending();
+        _diagnosticPending = pending.length;
+        _diagnosticAccepted = confirmedCount(publication.desired, pending);
+        if (pending.any((item) => item.id == victim.id) ||
+            pending.length >= capacity) {
+          throw const ReminderFailure(ReminderFailureCode.cancelFailed);
+        }
+      }
+      if (_paused ||
+          _closing ||
+          !await data.reminderPublicationCurrent(publication)) {
+        throw const ReminderFailure(ReminderFailureCode.stale);
       }
       final due = DateTime.fromMillisecondsSinceEpoch(
         clock.nowUtc.millisecondsSinceEpoch + 5000,
@@ -623,22 +728,76 @@ final class ReminderCoordinator {
         detail: '这是一条系统通知测试，没有修改任何日程。',
         location: '',
       );
-      await platform.cancel(request.id);
+      _diagnosticStep = DiagnosticNotificationStep.registering;
       await platform.schedule(request);
-      final matches = (await platform.pending())
-          .where((p) => p.id == request.id)
-          .toList();
+      testRegistered = true;
+      _diagnosticStep = DiagnosticNotificationStep.verifying;
+      final verified = await platform.pending();
+      _diagnosticPending = verified.length;
+      _diagnosticAccepted = confirmedCount(publication.desired, verified);
+      final matches = verified.where((p) => p.id == request.id).toList();
       if (matches.length != 1 || !matches.single.matches(request)) {
         throw const ReminderFailure(ReminderFailureCode.publishFailed);
       }
-      if (!(await data.inspectReminders()).preferences.enabled || _paused) {
+      if (!(await data.inspectReminders()).preferences.enabled ||
+          _paused ||
+          _closing ||
+          !await data.reminderPublicationCurrent(publication)) {
         await platform.cancel(request.id);
+        testRegistered = false;
+        throw const ReminderFailure(ReminderFailureCode.stale);
       }
+      _scheduleTestRefill(due);
+      _again = true;
+      _diagnosticStep = DiagnosticNotificationStep.completed;
+      _log(
+        DiagnosticEventName.reminderTestCompleted,
+        DiagnosticOutcome.complete,
+        null,
+        operation: DiagnosticNotificationOperation.test,
+      );
+    } on Object catch (error) {
+      _log(
+        DiagnosticEventName.reminderTestFailed,
+        DiagnosticOutcome.failure,
+        error is ReminderFailure ? error.code.name : 'publishFailed',
+        operation: DiagnosticNotificationOperation.test,
+        failure: error is ReminderFailure ? error : null,
+      );
+      if (testRegistered) {
+        try {
+          await platform.cancel('m6-check');
+          testRegistered = false;
+        } on Object {
+          _again = true;
+        }
+      }
+      rethrow;
     } finally {
       _work = null;
       done.complete();
-      if (_again) _scheduleRefresh();
+      if (releasedSlot && !testRegistered && !_paused && !_closing) {
+        await refresh();
+      } else if (_again) {
+        _scheduleRefresh();
+      }
     }
+  }
+
+  bool _activeTest(NotificationPending item) {
+    final remaining = item.deliveryAtUtc.difference(clock.nowUtc);
+    return item.id == 'm6-check' &&
+        remaining > Duration.zero &&
+        remaining <= const Duration(seconds: 15);
+  }
+
+  void _scheduleTestRefill(DateTime due) {
+    _testRefillTimer?.cancel();
+    final delay = due.add(const Duration(seconds: 1)).difference(clock.nowUtc);
+    _testRefillTimer = Timer(delay.isNegative ? Duration.zero : delay, () {
+      _testRefillTimer = null;
+      unawaited(refresh());
+    });
   }
 
   void resumeAfterMaintenance() {
@@ -657,6 +816,7 @@ final class ReminderCoordinator {
     _again = false;
     _timer?.cancel();
     _rollTimer?.cancel();
+    _testRefillTimer?.cancel();
     await _work;
     _paused = true;
     _generation++;
@@ -674,8 +834,10 @@ final class ReminderCoordinator {
   void _log(
     DiagnosticEventName event,
     DiagnosticOutcome outcome,
-    String? code,
-  ) {
+    String? code, {
+    DiagnosticNotificationOperation? operation,
+    ReminderFailure? failure,
+  }) {
     try {
       diagnostics?.record(
         DiagnosticEvent(
@@ -683,6 +845,18 @@ final class ReminderCoordinator {
           stage: DiagnosticStage.notifications,
           outcome: outcome,
           code: code == null ? null : diagnosticCode(code),
+          notification: operation == null
+              ? null
+              : DiagnosticNotificationMetadata(
+                  operation: operation,
+                  step: _diagnosticStep,
+                  desired: _diagnosticDesired,
+                  accepted: _diagnosticAccepted,
+                  pending: _diagnosticPending,
+                  capacity: _capability?.maximumPending,
+                  errorDomain: failure?.nativeFailure?.domain,
+                  errorCode: failure?.nativeFailure?.code,
+                ),
         ),
       );
     } catch (_) {

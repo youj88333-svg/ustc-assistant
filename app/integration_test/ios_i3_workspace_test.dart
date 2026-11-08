@@ -11,16 +11,23 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:ustc_assistant_m0/app/agent_workspace_page.dart';
+import 'package:ustc_assistant_m0/app/calendar_workspace_contract.dart';
 import 'package:ustc_assistant_m0/app/demo_runtime.dart';
+import 'package:ustc_assistant_m0/app/diagnostics_panel.dart';
 import 'package:ustc_assistant_m0/app/jw_sync_panel.dart';
 import 'package:ustc_assistant_m0/app/young_daily_sync_panel.dart';
 import 'package:ustc_assistant_m0/app/young_sync_panel.dart';
 import 'package:ustc_assistant_m0/core/reminder_contract.dart';
+import 'package:ustc_assistant_m0/core/agenda_contract.dart';
+import 'package:ustc_assistant_m0/core/calendar_contract.dart';
+import 'package:ustc_assistant_m0/core/diagnostics_contract.dart';
 import 'package:ustc_assistant_m0/core/young_daily_sync_contract.dart';
 import 'package:ustc_assistant_m0/ios_i3_entry.dart';
 import 'package:ustc_assistant_m0/platform/ios_runtime_platform_factory.dart';
+import 'package:ustc_assistant_m0/platform/ios_diagnostic_export.dart';
 
 const _platformChannel = MethodChannel('ustc_assistant/platform_v1');
+const _exportChannel = MethodChannel('ustc_assistant/diagnostics_v1');
 const _operationTimeout = Duration(seconds: 45);
 
 void main() {
@@ -39,7 +46,7 @@ void main() {
       // The fixture job leaves only synthetic personal events, an enabled
       // system-reminder setting, and provisional Simulator authorization.
       // Reading that state here does not alter the store or invoke Settings.
-      tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+      tester.platformDispatcher.textScaleFactorTestValue = 1;
       final previousHttpOverrides = HttpOverrides.current;
       HttpOverrides.global = _RejectHttpOverrides();
 
@@ -56,6 +63,7 @@ void main() {
           ).timeout(_operationTimeout),
         ))!;
         capturedBootstrap = opened;
+        await tester.runAsync(() => _seedDenseSchedule(opened.runtime!));
         debugPrint('I3 workspace: owned runtime opened');
         await tester.pumpWidget(
           RepaintBoundary(
@@ -100,12 +108,22 @@ void main() {
         );
         expect(find.byType(AgentWorkspacePage), findsNothing);
         expect(find.byIcon(Icons.mic_none_rounded), findsNothing);
+        expect(find.byType(DiagnosticsExportButton), findsOneWidget);
         expect(tester.takeException(), isNull);
         await _saveSyntheticScreen(
           tester,
           captureKey,
           runtime,
           'i3-workspace.png',
+        );
+        tester.platformDispatcher.textScaleFactorTestValue = 1.5;
+        await _pumpFrames(tester);
+        expect(tester.takeException(), isNull);
+        await _saveSyntheticScreen(
+          tester,
+          captureKey,
+          runtime,
+          'i3-workspace-large-text.png',
         );
         debugPrint('I3 workspace: schedule and task entry rendered');
 
@@ -197,6 +215,46 @@ void main() {
         expect(tester.takeException(), isNull);
         debugPrint('I3 workspace: system queue rendered at larger text size');
 
+        // Exercise the actual native Files export sheet through the UI. Only
+        // synthetic safe records exist in this fresh job-owned installation.
+        await tester.tap(
+          find.byKey(const ValueKey('diagnostics-export-button')),
+        );
+        Map<String, Object?>? exportState;
+        for (var attempt = 0; attempt < 40; attempt++) {
+          await _pumpFrames(tester, count: 1);
+          exportState = await tester.runAsync(_inspectExport);
+          if (exportState?['presented'] == true) break;
+        }
+        expect(exportState, {
+          'presented': true,
+          'tempFilePresent': true,
+          'busy': true,
+        });
+        final exportContents = (await tester.runAsync(
+          bootstrap.diagnostics.exportRecent,
+        ))!;
+        await tester.runAsync(() async {
+          await expectLater(
+            const IOSDiagnosticExport().saveDiagnosticLog(exportContents),
+            throwsA(isA<DiagnosticsFailure>()),
+          );
+          await _exportChannel
+              .invokeMethod<void>('i3ExportFixture', {'action': 'cancel'})
+              .timeout(_operationTimeout);
+        });
+        await _pumpFrames(tester);
+        expect(await tester.runAsync(_inspectExport), {
+          'presented': false,
+          'tempFilePresent': false,
+          'busy': false,
+        });
+        expect(find.text('日志已导出，请自行发送给维护者。'), findsNothing);
+        expect(tester.takeException(), isNull);
+        debugPrint(
+          'I3 workspace: native export sheet, single flight and cancel cleanup verified',
+        );
+
         // Exercise a valid iOS lifecycle sequence. It pauses foreground-only
         // automatic work and returns to the same owner without reopening it.
         tester.binding.handleAppLifecycleStateChanged(
@@ -236,6 +294,8 @@ void main() {
           'i3WorkspaceNavigation': true,
           'i3ReminderReadback': true,
           'i3LifecycleSingleOwner': true,
+          'i3DenseSevenDayCalendar': true,
+          'i3NativeExportPresentationAndCancelCleanup': true,
           'phoneLogicalWidth': logicalWidth,
           'bootstrapOpenCount': bootstrapOpenCount,
           'reminderQueueAccepted': runtime.reminders.view.accepted,
@@ -267,7 +327,11 @@ Future<void> _saveSyntheticScreen(
   DemoRuntime runtime,
   String filename,
 ) async {
-  expect(const {'i3-workspace.png', 'i3-reminders.png'}, contains(filename));
+  expect(const {
+    'i3-workspace.png',
+    'i3-workspace-large-text.png',
+    'i3-reminders.png',
+  }, contains(filename));
   await tester.pump();
   final boundary =
       key.currentContext!.findRenderObject()! as RenderRepaintBoundary;
@@ -287,6 +351,41 @@ Future<void> _saveSyntheticScreen(
           flush: true,
         ),
   );
+}
+
+Future<Map<String, Object?>> _inspectExport() async => (await _exportChannel
+    .invokeMapMethod<String, Object?>('i3ExportFixture', {'action': 'inspect'})
+    .timeout(_operationTimeout))!;
+
+Future<void> _seedDenseSchedule(DemoRuntime runtime) async {
+  final day = beijingDay(runtime.clock.nowUtc);
+  final monday = day.subtract(Duration(days: day.weekday - 1));
+  for (var column = 0; column < 7; column++) {
+    final date = monday.add(Duration(days: column));
+    for (final hour in [8, 14]) {
+      final window = await runtime.jwStore.localCalendar.query(
+        CalendarQuery(
+          firstDay: date,
+          endDayExclusive: date.add(const Duration(days: 1)),
+        ),
+      );
+      final start = DateTime.utc(date.year, date.month, date.day, hour - 8);
+      await runtime.jwStore.localCalendar.commit(
+        await runtime.jwStore.localCalendar.prepare(
+          window.context,
+          CreatePersonalEvent(
+            PersonalEventDraft(
+              title: column.isEven ? '合成电子系统设计' : '合成电磁场与波',
+              start: start,
+              end: start.add(const Duration(minutes: 95)),
+              location: 'TEST-${100 + column}',
+            ),
+          ),
+        ),
+      );
+    }
+  }
+  await runtime.calendar.load(day: monday, mode: CalendarViewMode.week);
 }
 
 Future<void> _waitForReminderReadback(

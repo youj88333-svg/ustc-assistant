@@ -31,12 +31,16 @@ FLUTTER_FRAMEWORK_ROOT = "Payload/Runner.app/Frameworks/Flutter.framework"
 SCHOOL_SCRIPT_NAMES = ("jw_probe.js", "young_transport.js")
 SCHOOL_SCRIPT_MAX_BYTES = 512 * 1024
 I2_DEBUG_MARKERS = (b"i2Fixture", b"i2StoreExists")
-I3_DEBUG_MARKERS = (b"i3Fixture",)
+I3_DEBUG_MARKERS = (b"i3Fixture", b"i3ExportFixture")
 I3_NOTIFICATION_WIRING_MARKERS = (
     b"ustc_assistant/ios_notifications_v1",
     b"getPendingNotificationRequestsWithCompletionHandler:",
     b"addNotificationRequest:withCompletionHandler:",
     b"removePendingNotificationRequestsWithIdentifiers:",
+)
+I3_DIAGNOSTIC_EXPORT_WIRING_MARKERS = (
+    b"ustc_assistant/diagnostics_v1",
+    b"initForExportingURLs:asCopy:",
 )
 
 MACHO_THIN_MAGICS = {
@@ -184,6 +188,8 @@ def _validate_manifest(value: dict[str, Any], expected_revision: str, stage: int
                 or any(ch not in "0123456789abcdef" for ch in digest)
             ):
                 _fail("invalid_manifest")
+        if "diagnosticExport" in value:
+            required["diagnosticExport"] = "system-documents-v1"
     else:
         _fail("invalid_stage")
     if set(value) != set(required):
@@ -738,7 +744,7 @@ def _validate_all_contents(
     declared_total: int,
     expected_revision: str,
     stage: int,
-) -> None:
+) -> bool:
     _validate_policy_paths(members)
     manifest_path = _stage_manifest_path(stage)
     manifest_data = _I0._read_member(zf, _I0._required_member(members, manifest_path), _I0.MAX_MANIFEST)
@@ -768,6 +774,10 @@ def _validate_all_contents(
             _fail("fixture_entry_point_present")
         if not _contains_all_binary_markers(zf, runner_info, I3_NOTIFICATION_WIRING_MARKERS):
             _fail("notification_native_wiring_missing")
+        if manifest.get("diagnosticExport") == "system-documents-v1" and not _contains_all_binary_markers(
+            zf, runner_info, I3_DIAGNOSTIC_EXPORT_WIRING_MARKERS
+        ):
+            _fail("diagnostic_export_native_wiring_missing")
 
     framework_binaries = _validate_frameworks(zf, members, expected_revision)
     if APP_FRAMEWORK_EXECUTABLE not in framework_binaries:
@@ -779,6 +789,7 @@ def _validate_all_contents(
             if not info.is_dir() and _is_macho_magic(_read_prefix(zf, info)):
                 _inspect_macho_entitlements(zf, info, stage)
     _I0._validate_archive_contents(zf, infos, declared_total)
+    return stage == 3 and manifest.get("diagnosticExport") == "system-documents-v1"
 
 
 def _hash_stream(stream: BinaryIO) -> tuple[str, int]:
@@ -811,7 +822,9 @@ def verify_package(
             with zipfile.ZipFile(ipa_file, "r") as zf:
                 members, declared_total = _I0._index_archive(zf)
                 infos = zf.infolist()
-                _validate_all_contents(zf, infos, members, declared_total, expected_revision, stage)
+                has_diagnostic_export = _validate_all_contents(
+                    zf, infos, members, declared_total, expected_revision, stage
+                )
             final_stat = os.fstat(ipa_file.fileno())
             if (
                 initial_stat.st_size != final_stat.st_size
@@ -861,6 +874,8 @@ def verify_package(
         checks["notificationNativeWiringStringsPresent"] = True
         checks["noI3FixtureMarkersInRunnerOrAOT"] = True
         checks["noBackgroundModesOrRemoteNotificationsEntitlement"] = True
+        if has_diagnostic_export:
+            checks["diagnosticExportNativeWiringStringsPresent"] = True
     report: dict[str, Any] = {
         "reportVersion": 1,
         "artifactKind": artifact_kind,

@@ -11,6 +11,8 @@ export TMPDIR="$repo/app/build/ios-i3/temp/" PYTHONDONTWRITEBYTECODE=1
 exec > >(tee "$output/i3-build.log") 2>&1
 swiftc app/ios/Runner/IOSNotificationPolicy.swift verification/ios-i3/policy_main.swift -o "$TMPDIR/i3-policy-test"
 "$TMPDIR/i3-policy-test"
+swiftc app/ios/Runner/IOSDiagnosticExportPolicy.swift verification/ios-i3/export_policy_main.swift -o "$TMPDIR/i3-export-policy-test"
+"$TMPDIR/i3-export-policy-test"
 python3 tools/ios-i3/test_verify_package.py
 
 # Re-run the unchanged full I1/I2 prerequisite gates on this exact revision,
@@ -22,7 +24,7 @@ done
 export TMPDIR="$repo/app/build/ios-i3/temp/"
 ruby tools/ios-i3/configure.rb "$revision" debug
 cd "$repo/app"
-flutter test --no-pub test/morning_brief_coordinator_test.dart test/reminder_coordinator_test.dart test/m6_feature_widgets_test.dart test/jobs/young_daily_sync_coordinator_test.dart test/jobs/young_daily_sync_policy_test.dart test/app/young_daily_sync_panel_test.dart 2>&1 | tee "$output/i3-shared-jobs-test.log"
+flutter test --no-pub test/morning_brief_coordinator_test.dart test/reminder_coordinator_test.dart test/m6_feature_widgets_test.dart test/jobs/young_daily_sync_coordinator_test.dart test/jobs/young_daily_sync_policy_test.dart test/app/young_daily_sync_panel_test.dart test/core/notification_diagnostics_test.dart test/platform/ios_diagnostic_export_test.dart test/platform/diagnostic_journal_test.dart test/platform/diagnostic_journal_concurrency_test.dart 2>&1 | tee "$output/i3-shared-jobs-test.log"
 xcrun simctl list runtimes -j > "$TMPDIR/runtimes.json"
 xcrun simctl list devicetypes -j > "$TMPDIR/device-types.json"
 read -r runtime device_type < <(python3 "$repo/tools/ios-i1/select_simulator.py" --runtimes "$TMPDIR/runtimes.json" --device-types "$TMPDIR/device-types.json")
@@ -36,7 +38,7 @@ flutter test --no-pub --no-uninstall integration_test/ios_i3_notifications_test.
 # Separate UI journey preserves this job's synthetic installation and no HTTP.
 flutter test --no-pub --no-uninstall integration_test/ios_i3_workspace_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" 2>&1 | tee "$output/i3-workspace-test.log"
 synthetic_container="$(xcrun simctl get_app_container "$simulator" cn.ustcassistant.ios.private data)"
-for name in i3-workspace i3-reminders; do
+for name in i3-workspace i3-workspace-large-text i3-reminders; do
   cp "$synthetic_container/Library/Application Support/ustc_assistant_v1/demo_v1/$name.png" "$output/$name.png"
 done
 xcrun simctl shutdown "$simulator"
@@ -57,7 +59,7 @@ app = pathlib.Path(os.environ['I3_APP']); out = pathlib.Path(os.environ['I3_OUTP
 source = pathlib.Path(os.environ['I3_REPO'])/'app/android/app/src/main/assets/ustc'
 assert app.is_dir() and not (app/'PlugIns').exists()
 scripts = {name: hashlib.sha256((source/name).read_bytes()).hexdigest() for name in ('jw_probe.js', 'young_transport.js')}
-manifest = dict(schemaVersion=1, kind='ios-i3-unsigned-ipa-v1', sourceRevision=os.environ['I3_REVISION'], flutterVersion='3.47.7', xcodeVersion='27.1', buildMode='release', bundleId='cn.ustcassistant.ios.private', scope='i3-notifications-foreground', widget=False, speech=False, authentication='manual', schoolStore='wk-uuid-v1', schoolScripts=scripts, notificationBackend='user-notifications-v1', notificationCapacity=60, dailyAuthentication='manual', foregroundOnly=True)
+manifest = dict(schemaVersion=1, kind='ios-i3-unsigned-ipa-v1', sourceRevision=os.environ['I3_REVISION'], flutterVersion='3.47.7', xcodeVersion='27.1', buildMode='release', bundleId='cn.ustcassistant.ios.private', scope='i3-notifications-foreground', widget=False, speech=False, authentication='manual', schoolStore='wk-uuid-v1', schoolScripts=scripts, notificationBackend='user-notifications-v1', notificationCapacity=60, dailyAuthentication='manual', foregroundOnly=True, diagnosticExport='system-documents-v1')
 (app/'ios-i3-provenance.json').write_text(json.dumps(manifest, sort_keys=True, indent=2)+'\n')
 (out/'ios-i3-provenance.json').write_text(json.dumps(manifest, sort_keys=True, indent=2)+'\n')
 target = out/'ios-i3-unsigned.ipa'

@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F40000000000000000000001 /* IOSDiagnosticExportPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F40000000000000000000011; };
+		F40000000000000000000002 /* IOSDiagnosticExportBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = F40000000000000000000012; };
 		F30000000000000000000001 /* IOSNotificationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F30000000000000000000011; };
 		F30000000000000000000002 /* IOSNotificationBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = F30000000000000000000012; };
 		F20000000000000000000001 /* IOSObservationBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = F20000000000000000000011; };
@@ -52,6 +54,8 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		F40000000000000000000011 /* IOSDiagnosticExportPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSDiagnosticExportPolicy.swift; sourceTree = "<group>"; };
+		F40000000000000000000012 /* IOSDiagnosticExportBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSDiagnosticExportBridge.swift; sourceTree = "<group>"; };
 		F30000000000000000000011 /* IOSNotificationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSNotificationPolicy.swift; sourceTree = "<group>"; };
 		F30000000000000000000012 /* IOSNotificationBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSNotificationBridge.swift; sourceTree = "<group>"; };
 		F20000000000000000000011 /* IOSObservationBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSObservationBridge.swift; sourceTree = "<group>"; };
@@ -147,6 +151,8 @@
 				F20000000000000000000011 /* IOSObservationBridge.swift */,
 				F30000000000000000000011 /* IOSNotificationPolicy.swift */,
 				F30000000000000000000012 /* IOSNotificationBridge.swift */,
+				F40000000000000000000011 /* IOSDiagnosticExportPolicy.swift */,
+				F40000000000000000000012 /* IOSDiagnosticExportBridge.swift */,
 				F20000000000000000000012 /* IOSSchoolPolicy.swift */,
 				F20000000000000000000013 /* IOSSchoolStoreLedger.swift */,
 				F20000000000000000000014 /* IOSSchoolScripts.swift */,
@@ -319,6 +325,8 @@
 				F20000000000000000000001 /* IOSObservationBridge.swift in Sources */,
 				F30000000000000000000001 /* IOSNotificationPolicy.swift in Sources */,
 				F30000000000000000000002 /* IOSNotificationBridge.swift in Sources */,
+				F40000000000000000000001 /* IOSDiagnosticExportPolicy.swift in Sources */,
+				F40000000000000000000002 /* IOSDiagnosticExportBridge.swift in Sources */,
 				F20000000000000000000002 /* IOSSchoolPolicy.swift in Sources */,
 				F20000000000000000000003 /* IOSSchoolStoreLedger.swift in Sources */,
 				F20000000000000000000004 /* IOSSchoolScripts.swift in Sources */,

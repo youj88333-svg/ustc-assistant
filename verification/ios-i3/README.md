@@ -6,6 +6,10 @@
 
 `ios_i3_workspace_test.dart` 保留同一合成安装，验证三页导航、真实队列回读、窄屏/大字体与前后台复用运行所有权；不发起学校或模型 HTTP。它导出的界面图片只含该 job 自建的合成日程，不能使用正常安装或物理设备替代。晨报的跨 06:00、同日复用和取消，以及每日二课的手动登录退化由共享行为测试验证；iOS 不执行无人值守账密投递。
 
+满额时的显式测试提醒只借用仍有 C3 期望、距离当前超过 15 秒的最远一条已确认请求；保留全部期望，短测试到期后补位，失败尝试立即恢复。未知保留项不借用。Simulator 验证真实 60 条队列中的测试登记、对账保留和到期补回；实际展示仍需目标手机核验。
+
+日志复用本地安全白名单，iOS 顶栏通过系统文件导出窗口保存，不自动上传。`IOSDiagnosticExportPolicy.swift` 与 `export_policy_main.swift` 检查固定封套、类型和体积；工作区集成检查实际原生窗口展示、单次导出和取消后临时文件清理。保存到用户所选位置的最终手势仍由目标手机验证。新包声明 `diagnosticExport=system-documents-v1` 时额外核验系统文件导出接线，Release 不得包含 `i3ExportFixture`。
+
 ## 执行
 
 在 macOS 的受控一次性工作区，运行 `bash tools/ios-i3/build.sh`。入口锁定既定 Flutter/Xcode，并运行当前修订的完整 I1/I2 前置检查、原生策略、共享作业、I3 Simulator 和单 Runner 设备 Release/AOT；不接物理设备、Apple 账号、学校或真实模型。Codemagic 的 `ios-i3-notifications` 采用手动、有界免费工作流。

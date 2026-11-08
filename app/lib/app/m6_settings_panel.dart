@@ -263,9 +263,9 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
       if (_isCurrent(generation)) {
         setState(() => _runtimeMessage = _testNotificationSuccess());
       }
-    } catch (_) {
+    } catch (error) {
       if (_isCurrent(generation)) {
-        setState(() => _runtimeMessage = _testNotificationFailure());
+        setState(() => _runtimeMessage = _testNotificationFailure(error));
       }
     } finally {
       if (_isCurrent(generation)) setState(() => _retryBusy = false);
@@ -692,11 +692,18 @@ String _queueStatus(ReminderRuntimeView view) {
   final failure = view.failure == null
       ? ''
       : '失败：${_reminderFailureLabel(view.failure!)}。';
+  final waitingForCapacity =
+      view.failure == null &&
+      view.capability?.maximumPending != null &&
+      view.accepted >= view.capability!.maximumPending &&
+      view.unregistered > 0;
   if (view.busy) {
     return '正在同步提醒队列；$accepted ${view.accepted}/${view.desired} 项；'
         '$expected；$registered；$unregistered。$failure$coverageNote$evidenceNote';
   }
-  final state = view.complete && view.failure == null
+  final state = waitingForCapacity
+      ? '系统队列已满，其余 ${view.unregistered} 条等待补位'
+      : view.complete && view.failure == null
       ? '当前期望项均已登记'
       : '当前期望项尚未全部登记';
   return '$state；$accepted ${view.accepted}/${view.desired} 项；'
@@ -709,6 +716,7 @@ String _reminderFailureLabel(ReminderFailureCode code) => switch (code) {
   ReminderFailureCode.maintenance => '本地维护正在进行',
   ReminderFailureCode.platformUnavailable => '系统提醒暂不可用',
   ReminderFailureCode.disabledBySystem => '系统通知未开启',
+  ReminderFailureCode.capacityReached => '系统队列暂时没有可用位置',
   ReminderFailureCode.publishFailed => '系统未接受部分提醒',
   ReminderFailureCode.cancelFailed => '部分旧提醒尚未撤销',
   ReminderFailureCode.cleanupPending => '仍有提醒清理待办',
@@ -779,10 +787,15 @@ String _testNotificationSuccess() {
   return '测试提醒已登记，5 秒后到期；实际显示可能延后，仍受$platform影响。';
 }
 
-String _testNotificationFailure() => switch (defaultTargetPlatform) {
-  TargetPlatform.windows => '测试提醒未能登记，请查看 Windows 通知开关后重试。',
-  TargetPlatform.android => '测试提醒未能登记，请检查系统通知权限后重试。',
-  _ => '测试提醒未能登记，请检查系统通知设置后重试。',
+String _testNotificationFailure(Object error) => switch (error) {
+  ReminderFailure(code: ReminderFailureCode.disabledBySystem) =>
+    '系统通知尚未允许，请点“允许通知”或打开系统通知设置。',
+  ReminderFailure(code: ReminderFailureCode.capacityReached) =>
+    '提醒队列已满，暂时无法为测试腾出位置。请稍后重试。',
+  ReminderFailure(code: ReminderFailureCode.maintenance) =>
+    '提醒队列正在处理，请稍后再发送测试通知。',
+  ReminderFailure(code: ReminderFailureCode.stale) => '日程或提醒设置刚有变化，请重新发送测试通知。',
+  _ => '测试提醒未能登记，请导出最近日志以便排查。',
 };
 
 String _systemAccessProgress(NotificationAccessAction action) =>

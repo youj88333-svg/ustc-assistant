@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 
 import '../core/diagnostics_contract.dart';
 import '../platform/android_file_access.dart';
+import '../platform/ios_diagnostic_export.dart';
 import 'app_design.dart';
 
 typedef DiagnosticLogSaver = Future<bool> Function(String contents);
@@ -353,6 +354,9 @@ final class _DiagnosticsExportButtonState
 }
 
 Future<bool> saveDiagnosticLog(String contents) async {
+  if (Platform.isIOS) {
+    return const IOSDiagnosticExport().saveDiagnosticLog(contents);
+  }
   if (Platform.isAndroid) {
     return const AndroidFileAccess().saveDiagnosticLog(contents);
   }

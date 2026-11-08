@@ -287,7 +287,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
   }
 
   Widget _toolbarArea(CalendarWorkspaceView view, double width, double height) {
-    final toolbar = _toolbar(view, width);
+    final toolbar = _toolbar(view, width, height);
     if (width >= 620 && height >= 460) return toolbar;
     return ConstrainedBox(
       constraints: BoxConstraints(
@@ -391,7 +391,9 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
     ),
   );
 
-  Widget _toolbar(CalendarWorkspaceView view, double width) {
+  Widget _toolbar(CalendarWorkspaceView view, double width, double height) {
+    if (width < 620 || height < 420) return _mobileToolbar(view, width);
+
     final narrow = width < 520;
     final port = widget.controller;
     final generation = _controllerGeneration;
@@ -493,6 +495,12 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
                 unawaited(
                   _load(port, includeInactive: !port.view.includeInactive),
                 );
+                break;
+              case _CalendarToolbarAction.undo:
+                final tasks = widget.tasks;
+                if (tasks != null) {
+                  unawaited(_undoTaskWrite(tasks, tasks.taskView.undo));
+                }
                 break;
             }
           },
@@ -605,6 +613,300 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         ),
       ],
     );
+  }
+
+  Widget _mobileToolbar(CalendarWorkspaceView view, double width) {
+    final port = widget.controller;
+    final generation = _controllerGeneration;
+    final day = _dateOnly(view.day);
+    final fullDate = view.mode == CalendarViewMode.week && view.window != null
+        ? _rangeLabel(view.window!.query.firstDay)
+        : _dateLabel(day);
+    final shortDate = _compactWorkspaceDateLabel(view, day);
+    final tasks = widget.tasks;
+    final iconOnlyFilter =
+        width < 360 && MediaQuery.textScalerOf(context).scale(1) > 1.4;
+
+    return Column(
+      key: const ValueKey('calendar-workspace-mobile-toolbar'),
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          key: const ValueKey('calendar-workspace-primary-controls'),
+          children: [
+            IconButton(
+              key: const ValueKey('calendar-workspace-prev'),
+              tooltip: view.mode == CalendarViewMode.week ? '上一周' : '前一天',
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+              padding: EdgeInsets.zero,
+              onPressed: () => _moveDay(view, -1),
+              icon: const Icon(Icons.chevron_left_rounded),
+            ),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Semantics(
+                label: fullDate,
+                child: Tooltip(
+                  message: fullDate,
+                  child: OutlinedButton(
+                    key: const ValueKey('calendar-workspace-date-picker'),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(48, 48),
+                      tapTargetSize: MaterialTapTargetSize.padded,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                    onPressed: () => _pickWorkspaceDate(view),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.calendar_month_outlined, size: 18),
+                        const SizedBox(width: 7),
+                        Expanded(
+                          child: Text(
+                            shortDate,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 4),
+            IconButton(
+              key: const ValueKey('calendar-workspace-next'),
+              tooltip: view.mode == CalendarViewMode.week ? '下一周' : '后一天',
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+              padding: EdgeInsets.zero,
+              onPressed: () => _moveDay(view, 1),
+              icon: const Icon(Icons.chevron_right_rounded),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Row(
+          key: const ValueKey('calendar-workspace-secondary-controls'),
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            SegmentedButton<CalendarViewMode>(
+              key: const ValueKey('calendar-workspace-view-mode'),
+              style: const ButtonStyle(
+                minimumSize: WidgetStatePropertyAll(Size(48, 48)),
+                padding: WidgetStatePropertyAll(
+                  EdgeInsets.symmetric(horizontal: 7),
+                ),
+              ),
+              segments: const [
+                ButtonSegment(value: CalendarViewMode.day, label: Text('日')),
+                ButtonSegment(value: CalendarViewMode.week, label: Text('周')),
+              ],
+              selected: {view.mode},
+              onSelectionChanged: view.loading || _viewModePreferenceBusy
+                  ? null
+                  : (selection) => unawaited(
+                      _selectViewMode(selection.first, port, generation),
+                    ),
+            ),
+            TextButton(
+              key: const ValueKey('calendar-workspace-today'),
+              style: TextButton.styleFrom(
+                minimumSize: const Size(48, 48),
+                tapTargetSize: MaterialTapTargetSize.padded,
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+              ),
+              onPressed: () => _load(port, day: _dateOnly(port.today)),
+              child: const Text('今天'),
+            ),
+            PopupMenuButton<_CalendarToolbarAction>(
+              key: const ValueKey('calendar-workspace-filter'),
+              tooltip: '筛选与撤销 · ${_filterTooltip(view)}',
+              onOpened: () => _trackTransientRouteOpened(generation),
+              onCanceled: () => _trackTransientRouteClosed(generation),
+              onSelected: (action) =>
+                  _applyMobileToolbarAction(action, port, generation),
+              itemBuilder: (context) => [
+                _filterMenuItem(
+                  _CalendarToolbarAction.allSources,
+                  '全部来源',
+                  view.filter == CalendarFilter.all,
+                  'calendar-workspace-filter-all',
+                ),
+                _filterMenuItem(
+                  _CalendarToolbarAction.courses,
+                  '课程',
+                  view.filter == CalendarFilter.course,
+                  'calendar-workspace-filter-course',
+                ),
+                _filterMenuItem(
+                  _CalendarToolbarAction.exams,
+                  '考试',
+                  view.filter == CalendarFilter.exam,
+                  'calendar-workspace-filter-exam',
+                ),
+                _filterMenuItem(
+                  _CalendarToolbarAction.young,
+                  '二课',
+                  view.filter == CalendarFilter.young,
+                  'calendar-workspace-filter-young',
+                ),
+                _filterMenuItem(
+                  _CalendarToolbarAction.personal,
+                  '个人安排',
+                  view.filter == CalendarFilter.personal,
+                  'calendar-workspace-filter-personal',
+                ),
+                _filterMenuItem(
+                  _CalendarToolbarAction.planBlocks,
+                  '任务时间块',
+                  view.filter == CalendarFilter.planBlock,
+                  'calendar-workspace-filter-plan-block',
+                ),
+                if (tasks != null) ...[
+                  const PopupMenuDivider(height: 8),
+                  _undoMenuItem(tasks),
+                ],
+                const PopupMenuDivider(height: 8),
+                PopupMenuItem<_CalendarToolbarAction>(
+                  key: const ValueKey('calendar-workspace-include-inactive'),
+                  value: _CalendarToolbarAction.toggleInactive,
+                  child: Row(
+                    children: [
+                      Icon(
+                        view.includeInactive
+                            ? Icons.check_box_rounded
+                            : Icons.check_box_outline_blank_rounded,
+                        size: 18,
+                        color: _green,
+                      ),
+                      const SizedBox(width: 9),
+                      const Text('显示隐藏/跳过及来源失效历史'),
+                    ],
+                  ),
+                ),
+              ],
+              child: iconOnlyFilter
+                  ? const SizedBox.square(
+                      dimension: 48,
+                      child: Icon(Icons.filter_list_rounded),
+                    )
+                  : Container(
+                      constraints: const BoxConstraints(
+                        minWidth: 48,
+                        minHeight: 48,
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 12,
+                      ),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: const Color(0xFFD4DDD7)),
+                        borderRadius: BorderRadius.circular(9),
+                        color: Colors.white,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.filter_list_rounded, size: 17),
+                          const SizedBox(width: 4),
+                          const Text('筛选', style: TextStyle(fontSize: 12)),
+                          if (view.filter != CalendarFilter.all ||
+                              view.includeInactive)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 4),
+                              child: Container(
+                                width: 6,
+                                height: 6,
+                                decoration: const BoxDecoration(
+                                  color: _green,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+            ),
+            FilledButton(
+              key: const ValueKey('calendar-personal-create'),
+              onPressed: view.canWrite && !_actionBusy
+                  ? () => _openPersonalEditor(
+                      port: port,
+                      expectedContext: view.window!.context,
+                      initial: _blankDraft(port.view.day),
+                      heading: '新建个人安排',
+                      explanation: '时刻按北京时间输入；保存后由日程查询投影。',
+                      allowWeekly: true,
+                      intentFor: (draft) => CreatePersonalEvent(draft),
+                    )
+                  : null,
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(48, 48),
+                tapTargetSize: MaterialTapTargetSize.padded,
+                padding: const EdgeInsets.symmetric(horizontal: 7),
+              ),
+              child: const Text('新建'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  PopupMenuItem<_CalendarToolbarAction> _undoMenuItem(TaskWorkspacePort port) {
+    final undo = port.taskView.undo;
+    final canUndo = undo.canUndo && port.taskView.canWrite && !_actionBusy;
+    return PopupMenuItem<_CalendarToolbarAction>(
+      key: const ValueKey('calendar-workspace-undo'),
+      value: _CalendarToolbarAction.undo,
+      enabled: canUndo,
+      child: Row(
+        children: [
+          Icon(Icons.undo_rounded, size: 18, color: canUndo ? _green : _muted),
+          const SizedBox(width: 9),
+          Text(undo.canUndo ? '撤销最近修改' : '暂无可撤销写入'),
+        ],
+      ),
+    );
+  }
+
+  void _applyMobileToolbarAction(
+    _CalendarToolbarAction action,
+    CalendarWorkspacePort port,
+    int generation,
+  ) {
+    _trackTransientRouteClosed(generation);
+    if (!_currentController(port, generation)) return;
+    switch (action) {
+      case _CalendarToolbarAction.allSources:
+        unawaited(_load(port, filter: CalendarFilter.all));
+        break;
+      case _CalendarToolbarAction.courses:
+        unawaited(_load(port, filter: CalendarFilter.course));
+        break;
+      case _CalendarToolbarAction.exams:
+        unawaited(_load(port, filter: CalendarFilter.exam));
+        break;
+      case _CalendarToolbarAction.young:
+        unawaited(_load(port, filter: CalendarFilter.young));
+        break;
+      case _CalendarToolbarAction.personal:
+        unawaited(_load(port, filter: CalendarFilter.personal));
+        break;
+      case _CalendarToolbarAction.planBlocks:
+        unawaited(_load(port, filter: CalendarFilter.planBlock));
+        break;
+      case _CalendarToolbarAction.toggleInactive:
+        unawaited(_load(port, includeInactive: !port.view.includeInactive));
+        break;
+      case _CalendarToolbarAction.undo:
+        final tasks = widget.tasks;
+        if (tasks != null) {
+          unawaited(_undoTaskWrite(tasks, tasks.taskView.undo));
+        }
+        break;
+    }
   }
 
   Widget _undoButton(TaskWorkspacePort port, {required bool compact}) =>
@@ -3622,6 +3924,7 @@ enum _CalendarToolbarAction {
   young,
   personal,
   planBlocks,
+  undo,
   toggleInactive,
 }
 
@@ -3691,6 +3994,24 @@ String _rangeLabel(DateTime first) {
   final end = DateTime.utc(first.year, first.month, first.day + 6);
   return '${_shortDate(first)} – ${_shortDate(end)}';
 }
+
+String _compactWorkspaceDateLabel(
+  CalendarWorkspaceView view,
+  DateTime selectedDay,
+) {
+  if (view.mode != CalendarViewMode.week || view.window == null) {
+    return _compactMonthDay(selectedDay);
+  }
+  final first = view.window!.query.firstDay;
+  final last = DateTime.utc(first.year, first.month, first.day + 6);
+  final firstLabel = _compactMonthDay(first);
+  return first.year == last.year && first.month == last.month
+      ? '$firstLabel–${last.day.toString().padLeft(2, '0')}'
+      : '$firstLabel–${_compactMonthDay(last)}';
+}
+
+String _compactMonthDay(DateTime day) =>
+    '${day.month.toString().padLeft(2, '0')}/${day.day.toString().padLeft(2, '0')}';
 
 String _shortDate(DateTime day) =>
     '${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';

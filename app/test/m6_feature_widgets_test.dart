@@ -121,11 +121,7 @@ void main() {
     addTearDown(data.dispose);
     addTearDown(briefs.dispose);
     await tester.pumpWidget(
-      _settingsHost(
-        data,
-        briefs,
-        configureSystemAccess: pendingAction,
-      ),
+      _settingsHost(data, briefs, configureSystemAccess: pendingAction),
     );
     await tester.pumpAndSettle();
     final button = find.byKey(const ValueKey('m6-system-inspect'));
@@ -139,11 +135,7 @@ void main() {
     expect(calls, 1);
 
     await tester.pumpWidget(
-      _settingsHost(
-        data,
-        briefs,
-        configureSystemAccess: (_) async {},
-      ),
+      _settingsHost(data, briefs, configureSystemAccess: (_) async {}),
     );
     await tester.pumpAndSettle();
     expect(tester.widget<OutlinedButton>(button).onPressed, isNotNull);
@@ -248,6 +240,60 @@ void main() {
     },
   );
 
+  testWidgets(
+    'full queue waits for a slot and test errors identify the cause',
+    (tester) async {
+      final data = _FakeReminderData();
+      final briefs = _FakeBriefData();
+      addTearDown(data.dispose);
+      addTearDown(briefs.dispose);
+      await data.saveReminderPreferences(
+        data.settings,
+        data.settings.preferences.copyWith(enabled: true),
+      );
+      var failure = ReminderFailureCode.capacityReached;
+      await tester.pumpWidget(
+        _settingsHost(
+          data,
+          briefs,
+          runtime: const ReminderRuntimeView(
+            accepted: 60,
+            desired: 61,
+            capability: NotificationCapability(
+              available: true,
+              enabledBySystem: true,
+              schedulesAfterExit: true,
+              activationAvailable: true,
+              maximumPending: 60,
+              authorizationStatus: NotificationAuthorizationStatus.authorized,
+            ),
+          ),
+          testNotification: () async => throw ReminderFailure(failure),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('其余 1 条等待补位'), findsOneWidget);
+      expect(find.textContaining('失败：'), findsNothing);
+      final button = find.byKey(const ValueKey('m6-test-notification'));
+      await tester.ensureVisible(button);
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('暂时无法为测试腾出位置'), findsOneWidget);
+      expect(find.textContaining('系统通知尚未允许'), findsNothing);
+      failure = ReminderFailureCode.publishFailed;
+      await tester.ensureVisible(button);
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('请导出最近日志'), findsOneWidget);
+      expect(find.textContaining('系统通知尚未允许'), findsNothing);
+      failure = ReminderFailureCode.disabledBySystem;
+      await tester.ensureVisible(button);
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(find.textContaining('系统通知尚未允许'), findsOneWidget);
+    },
+  );
+
   testWidgets('iOS nullable authorization details stay unknown', (
     tester,
   ) async {
@@ -315,54 +361,55 @@ void main() {
     expect(find.textContaining('非精确提醒'), findsNothing);
   });
 
-  testWidgets('system access controls stay reachable at phone sizes and large text', (
-    tester,
-  ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.android;
-    addTearDown(() => debugDefaultTargetPlatformOverride = null);
-    tester.view.devicePixelRatio = 1;
-    for (final size in const [
-      Size(320, 640),
-      Size(360, 720),
-      Size(412, 820),
-      Size(640, 320),
-    ]) {
-      tester.view.physicalSize = size;
-      final data = _FakeReminderData();
-      final briefs = _FakeBriefData();
-      final actions = <NotificationAccessAction>[];
-      addTearDown(data.dispose);
-      addTearDown(briefs.dispose);
-      await tester.pumpWidget(
-        _settingsHost(
-          data,
-          briefs,
-          textScaleFactor: 2,
-          configureSystemAccess: (action) async => actions.add(action),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      for (final key in const [
-        'm6-system-inspect',
-        'm6-system-notifications',
-        'm6-system-exact',
-        'm6-system-settings',
+  testWidgets(
+    'system access controls stay reachable at phone sizes and large text',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      tester.view.devicePixelRatio = 1;
+      for (final size in const [
+        Size(320, 640),
+        Size(360, 720),
+        Size(412, 820),
+        Size(640, 320),
       ]) {
-        final button = find.byKey(ValueKey(key));
-        await tester.ensureVisible(button);
+        tester.view.physicalSize = size;
+        final data = _FakeReminderData();
+        final briefs = _FakeBriefData();
+        final actions = <NotificationAccessAction>[];
+        addTearDown(data.dispose);
+        addTearDown(briefs.dispose);
+        await tester.pumpWidget(
+          _settingsHost(
+            data,
+            briefs,
+            textScaleFactor: 2,
+            configureSystemAccess: (action) async => actions.add(action),
+          ),
+        );
         await tester.pumpAndSettle();
-        expect(tester.getSize(button).height, greaterThanOrEqualTo(48));
-        await tester.tap(button);
-        await tester.pumpAndSettle();
+
+        for (final key in const [
+          'm6-system-inspect',
+          'm6-system-notifications',
+          'm6-system-exact',
+          'm6-system-settings',
+        ]) {
+          final button = find.byKey(ValueKey(key));
+          await tester.ensureVisible(button);
+          await tester.pumpAndSettle();
+          expect(tester.getSize(button).height, greaterThanOrEqualTo(48));
+          await tester.tap(button);
+          await tester.pumpAndSettle();
+        }
+        expect(tester.takeException(), isNull);
+        expect(actions, hasLength(4));
       }
-      expect(tester.takeException(), isNull);
-      expect(actions, hasLength(4));
-    }
-    tester.view.resetPhysicalSize();
-    tester.view.resetDevicePixelRatio();
-    debugDefaultTargetPlatformOverride = null;
-  });
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
 
   testWidgets('timed reminder slot can be turned off and saved', (
     tester,
@@ -1036,8 +1083,8 @@ Widget _settingsHost(
   _FakeReminderData data,
   _FakeBriefData briefs, {
   Future<void> Function()? regenerate,
-  Future<void> Function(NotificationAccessAction action)?
-  configureSystemAccess,
+  Future<void> Function(NotificationAccessAction action)? configureSystemAccess,
+  Future<void> Function()? testNotification,
   ReminderRuntimeView? runtime,
   double textScaleFactor = 1,
 }) => MaterialApp(
@@ -1045,9 +1092,9 @@ Widget _settingsHost(
   supportedLocales: const [Locale('zh', 'CN')],
   locale: const Locale('zh', 'CN'),
   builder: (context, child) => MediaQuery(
-    data: MediaQuery.of(context).copyWith(
-      textScaler: TextScaler.linear(textScaleFactor),
-    ),
+    data: MediaQuery.of(
+      context,
+    ).copyWith(textScaler: TextScaler.linear(textScaleFactor)),
     child: child!,
   ),
   home: Scaffold(
@@ -1067,6 +1114,7 @@ Widget _settingsHost(
       retryReminders: () async {},
       regenerateMorning: regenerate ?? () async {},
       configureSystemAccess: configureSystemAccess,
+      testNotification: testNotification,
     ),
   ),
 );

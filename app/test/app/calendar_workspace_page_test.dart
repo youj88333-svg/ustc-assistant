@@ -1,6 +1,10 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ustc_assistant_m0/app/calendar_workspace_contract.dart';
@@ -646,16 +650,12 @@ void main() {
         ValueKey<CalendarReference>(course.reference),
       );
       expect(
-        find.descendant(of: courseTile, matching: find.text('教学楼 5304')),
-        findsNothing,
-      );
-      expect(
-        find.descendant(of: courseTile, matching: find.text('地点：教学楼 5304')),
+        find.descendant(of: courseTile, matching: find.text('5304')),
         findsOneWidget,
       );
       expect(
         find.descendant(of: courseTile, matching: find.text('教师：张老师、王老师')),
-        findsOneWidget,
+        findsNothing,
       );
       expect(find.textContaining('事务大厅'), findsOneWidget);
       final shortTile = find.byKey(
@@ -670,6 +670,7 @@ void main() {
       );
       expect(courseTip.message, contains('地点：教学楼 5304'));
       expect(courseTip.message, contains('教师：张老师、王老师'));
+      expect(courseTip.message, contains('时间（北京时间）：07:50–12:25'));
       await tester.tap(find.text('日'));
       await tester.pumpAndSettle();
       expect(find.text('地点：教学楼 5304'), findsOneWidget);
@@ -1364,6 +1365,7 @@ void main() {
       (size: Size(320, 420), scale: 1.8),
       (size: Size(600, 560), scale: 1.35),
       (size: Size(1280, 820), scale: 1.0),
+      (size: Size(1280, 720), scale: 2.0),
     ]) {
       await _setSize(tester, scenario.size);
       final occurrence = _occurrence(
@@ -1574,9 +1576,14 @@ void main() {
     for (final scenario in const [
       (size: Size(320, 640), scale: 1.0),
       (size: Size(360, 720), scale: 1.5),
+      (size: Size(375, 812), scale: 1.0),
+      (size: Size(375, 812), scale: 2.0),
+      (size: Size(393, 852), scale: 1.5),
+      (size: Size(393, 852), scale: 2.0),
       (size: Size(412, 720), scale: 2.0),
       (size: Size(600, 360), scale: 1.5),
       (size: Size(800, 360), scale: 1.5),
+      (size: Size(844, 390), scale: 1.5),
       (size: Size(320, 420), scale: 2.0),
     ]) {
       await _setSize(tester, scenario.size);
@@ -1594,6 +1601,36 @@ void main() {
         findsOneWidget,
         reason: 'toolbar scroll at ${scenario.size}, scale ${scenario.scale}',
       );
+      final primary = find.byKey(
+        const ValueKey('calendar-workspace-primary-controls'),
+      );
+      final secondary = find.byKey(
+        const ValueKey('calendar-workspace-secondary-controls'),
+      );
+      expect(primary, findsOneWidget);
+      expect(secondary, findsOneWidget);
+      final primaryRect = tester.getRect(primary);
+      final secondaryRect = tester.getRect(secondary);
+      expect(secondaryRect.top, greaterThanOrEqualTo(primaryRect.bottom));
+      expect(
+        secondaryRect.top - primaryRect.bottom,
+        lessThanOrEqualTo(8),
+        reason: 'the mobile controls occupy two compact rows',
+      );
+      for (final key in const [
+        'calendar-workspace-prev',
+        'calendar-workspace-date-picker',
+        'calendar-workspace-next',
+        'calendar-workspace-view-mode',
+        'calendar-workspace-today',
+        'calendar-workspace-filter',
+        'calendar-personal-create',
+      ]) {
+        final control = find.byKey(ValueKey(key));
+        expect(control, findsOneWidget, reason: key);
+        expect(tester.getSize(control).height, greaterThanOrEqualTo(48));
+        expect(control.hitTestable(), findsOneWidget, reason: key);
+      }
       final today = find.byKey(const ValueKey('calendar-workspace-today'));
       await tester.ensureVisible(today);
       expect(tester.getSize(today).height, greaterThanOrEqualTo(48));
@@ -1611,6 +1648,195 @@ void main() {
       port.dispose();
     }
   });
+
+  testWidgets(
+    'mobile filter menu keeps undo reachable and preserves filter selection',
+    (tester) async {
+      await _setSize(tester, const Size(375, 812));
+      final port = _FakeCalendarWorkspacePort();
+      final tasks = _FakeCalendarTaskPort(records: const []);
+      addTearDown(port.dispose);
+      addTearDown(tasks.dispose);
+
+      await tester.pumpWidget(_host(port, tasks: tasks));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('calendar-workspace-filter')));
+      await tester.pumpAndSettle();
+
+      final undo = find.byKey(const ValueKey('calendar-workspace-undo'));
+      expect(undo, findsOneWidget);
+      expect(tester.getSize(undo).height, greaterThanOrEqualTo(48));
+      expect(find.text('暂无可撤销写入'), findsOneWidget);
+      await tester.tap(
+        find.byKey(const ValueKey('calendar-workspace-filter-course')),
+      );
+      await tester.pumpAndSettle();
+      expect(port.view.filter, CalendarFilter.course);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'dense synthetic mobile week gives course titles priority and omits empty labels',
+    (tester) async {
+      final captureFontFamily = await tester.runAsync(_loadCaptureFont);
+      final ports = <_FakeCalendarWorkspacePort>[];
+      addTearDown(() {
+        for (final port in ports) {
+          port.dispose();
+        }
+      });
+
+      for (final textScale in const [1.0, 1.5]) {
+        await _setSize(tester, const Size(393, 852));
+        final courses = <CalendarOccurrence>[];
+        const localTimes = [
+          (hour: 8, minute: 0),
+          (hour: 9, minute: 30),
+          (hour: 11, minute: 0),
+          (hour: 13, minute: 0),
+          (hour: 14, minute: 30),
+        ];
+        for (var dayIndex = 0; dayIndex < 7; dayIndex++) {
+          final day = DateTime.utc(2026, 10, 12 + dayIndex);
+          for (
+            var courseIndex = 0;
+            courseIndex < localTimes.length;
+            courseIndex++
+          ) {
+            final time = localTimes[courseIndex];
+            final localStart = DateTime.utc(
+              day.year,
+              day.month,
+              day.day,
+              time.hour,
+              time.minute,
+            );
+            courses.add(
+              _occurrence(
+                kind: CalendarKind.course,
+                id: 5000 + dayIndex * 10 + courseIndex,
+                title: '合成课程${dayIndex + 1}-${courseIndex + 1}名称优先',
+                academicDetails: JwAcademicDetails(
+                  campus: '东区',
+                  building: '教学楼',
+                  room: 'A30${courseIndex + 1}',
+                  teachers: ['合成教师${dayIndex + 1}'],
+                ),
+                startsAtUtc: localStart.subtract(const Duration(hours: 8)),
+                endsAtUtc: localStart
+                    .add(const Duration(minutes: 80))
+                    .subtract(const Duration(hours: 8)),
+              ),
+            );
+          }
+        }
+        final missingFacts = _occurrence(
+          kind: CalendarKind.course,
+          id: 5999,
+          title: '无地点教师课程',
+          academicDetails: JwAcademicDetails(),
+          startsAtUtc: DateTime.utc(2026, 10, 12, 9),
+          endsAtUtc: DateTime.utc(2026, 10, 12, 10),
+        );
+        final port = _FakeCalendarWorkspacePort(
+          occurrences: [...courses, missingFacts],
+        );
+        ports.add(port);
+
+        await tester.pumpWidget(
+          _host(
+            port,
+            textScale: textScale,
+            captureBoundaryKey: const ValueKey('dense-mobile-week-capture'),
+            fontFamily: captureFontFamily,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const ValueKey('calendar-week-horizontal-scroll')),
+          findsOneWidget,
+        );
+        for (final course in courses) {
+          expect(
+            find.byKey(ValueKey<CalendarReference>(course.reference)),
+            findsOneWidget,
+          );
+        }
+        final firstCourse = courses.first;
+        final firstTile = find.byKey(
+          ValueKey<CalendarReference>(firstCourse.reference),
+        );
+        expect(
+          find.descendant(
+            of: firstTile,
+            matching: find.text(firstCourse.title),
+          ),
+          findsOneWidget,
+          reason:
+              'large text must still show course identity rather than a dot',
+        );
+        if (textScale == 1) {
+          expect(
+            find.descendant(of: firstTile, matching: find.text('A301')),
+            findsOneWidget,
+          );
+        } else {
+          expect(
+            find.descendant(of: firstTile, matching: find.text('A301')),
+            findsNothing,
+          );
+        }
+        expect(
+          find.descendant(of: firstTile, matching: find.textContaining('教师：')),
+          findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: firstTile,
+            matching: find.textContaining('08:00'),
+          ),
+          findsNothing,
+        );
+        final firstTooltip = tester.widget<Tooltip>(
+          find.descendant(of: firstTile, matching: find.byType(Tooltip)).first,
+        );
+        expect(firstTooltip.message, contains(firstCourse.title));
+        expect(firstTooltip.message, contains('教室：A301'));
+        expect(firstTooltip.message, contains('教师：合成教师1'));
+        expect(firstTooltip.message, contains('时间（北京时间）：08:00–09:20'));
+
+        final missingTile = find.byKey(
+          ValueKey<CalendarReference>(missingFacts.reference),
+        );
+        expect(
+          find.descendant(
+            of: missingTile,
+            matching: find.textContaining('本次来源未提供'),
+          ),
+          findsNothing,
+        );
+        expect(
+          find.descendant(
+            of: missingTile,
+            matching: find.textContaining('教师：'),
+          ),
+          findsNothing,
+        );
+        final missingTooltip = tester.widget<Tooltip>(
+          find
+              .descendant(of: missingTile, matching: find.byType(Tooltip))
+              .first,
+        );
+        expect(missingTooltip.message, contains('地点：本次来源未提供'));
+        expect(missingTooltip.message, contains('教师：本次来源未提供'));
+        expect(tester.takeException(), isNull);
+        await _captureDenseWeekIfRequested(tester, textScale);
+        await tester.pumpWidget(const SizedBox.shrink());
+      }
+    },
+  );
 
   testWidgets('view mode saves its preference before reloading the calendar', (
     tester,
@@ -1781,28 +2007,88 @@ Widget _host(
   TaskWorkspacePort? tasks,
   DateTime? calendarTaskNowUtc,
   double textScale = 1,
+  Key? captureBoundaryKey,
+  String? fontFamily,
   Future<void> Function(CalendarViewMode mode)? onViewModeSelected,
 }) => MaterialApp(
   theme: ThemeData(
     useMaterial3: true,
     colorSchemeSeed: const Color(0xFF1F6B45),
+    fontFamily: fontFamily,
   ),
   home: Builder(
-    builder: (context) => MediaQuery(
-      data: MediaQuery.of(
-        context,
-      ).copyWith(textScaler: TextScaler.linear(textScale)),
-      child: Scaffold(
-        body: CalendarWorkspacePage(
-          controller: controller,
-          tasks: tasks,
-          calendarTaskNowUtc: calendarTaskNowUtc,
-          onViewModeSelected: onViewModeSelected,
+    builder: (context) {
+      final page = CalendarWorkspacePage(
+        controller: controller,
+        tasks: tasks,
+        calendarTaskNowUtc: calendarTaskNowUtc,
+        onViewModeSelected: onViewModeSelected,
+      );
+      return MediaQuery(
+        data: MediaQuery.of(
+          context,
+        ).copyWith(textScaler: TextScaler.linear(textScale)),
+        child: Scaffold(
+          body: captureBoundaryKey == null
+              ? page
+              : RepaintBoundary(
+                  key: captureBoundaryKey,
+                  child: ColoredBox(color: Colors.white, child: page),
+                ),
         ),
-      ),
-    ),
+      );
+    },
   ),
 );
+
+Future<String?> _loadCaptureFont() async {
+  final fontPath = Platform.environment['USTC_UI_CAPTURE_FONT'];
+  if (fontPath == null || fontPath.trim().isEmpty) return null;
+  final fontBytes = await File(fontPath).readAsBytes();
+  const family = 'I3CalendarCaptureFont';
+  final loader = FontLoader(family)
+    ..addFont(Future<ByteData>.value(ByteData.sublistView(fontBytes)));
+  await loader.load();
+  final iconPath = Platform.environment['USTC_UI_CAPTURE_ICON_FONT'];
+  if (iconPath != null && iconPath.isNotEmpty) {
+    final iconBytes = await File(iconPath).readAsBytes();
+    await (FontLoader(
+      'MaterialIcons',
+    )..addFont(Future<ByteData>.value(ByteData.sublistView(iconBytes)))).load();
+  }
+  return family;
+}
+
+Future<void> _captureDenseWeekIfRequested(
+  WidgetTester tester,
+  double textScale,
+) async {
+  final directoryPath = Platform.environment['USTC_UI_CAPTURE_DIR'];
+  if (directoryPath == null || directoryPath.trim().isEmpty) return;
+
+  final boundary = tester.renderObject<RenderRepaintBoundary>(
+    find.byKey(const ValueKey('dense-mobile-week-capture')),
+  );
+  await tester.runAsync(() async {
+    final image = await boundary.toImage(pixelRatio: 2);
+    try {
+      final data = await image.toByteData(format: ui.ImageByteFormat.png);
+      if (data == null) throw StateError('Unable to encode the UI capture');
+      final scaleLabel = textScale.toString().replaceAll('.', '_');
+      final file = File(
+        '$directoryPath${Platform.pathSeparator}'
+        'dense-calendar-393-scale-$scaleLabel.png',
+      );
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(
+        data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+        flush: true,
+      );
+    } finally {
+      image.dispose();
+    }
+  });
+}
 
 Future<void> _setSize(WidgetTester tester, Size size) async {
   addTearDown(() async {

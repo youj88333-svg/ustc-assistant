@@ -181,13 +181,14 @@ final class IOSNotifications
         'stale' => ReminderFailureCode.stale,
         'maintenance' || 'busy' => ReminderFailureCode.maintenance,
         'disabled_by_system' => ReminderFailureCode.disabledBySystem,
+        'capacity_reached' => ReminderFailureCode.capacityReached,
         'publish_failed' => ReminderFailureCode.publishFailed,
         'cancel_failed' => ReminderFailureCode.cancelFailed,
         'cleanup_pending' => ReminderFailureCode.cleanupPending,
         'storage_failed' => ReminderFailureCode.storageFailed,
         'closed' => ReminderFailureCode.closed,
         _ => ReminderFailureCode.platformUnavailable,
-      });
+      }, nativeFailure: _nativeFailure(error.details));
     } on ReminderFailure {
       rethrow;
     } catch (_) {
@@ -198,6 +199,24 @@ final class IOSNotifications
 
   static Never _invalid() =>
       throw const ReminderFailure(ReminderFailureCode.invalidInput);
+
+  static NotificationNativeFailure? _nativeFailure(Object? raw) {
+    if (raw is! Map ||
+        raw.length != 2 ||
+        !raw.containsKey('domain') ||
+        !raw.containsKey('code')) {
+      return null;
+    }
+    final domain = NotificationErrorDomain.values
+        .where((value) => value.name == raw['domain'])
+        .firstOrNull;
+    final code = raw['code'];
+    if (domain == null ||
+        code != null && (code is! int || code < -32768 || code > 32767)) {
+      return null;
+    }
+    return NotificationNativeFailure(domain, code as int?);
+  }
 
   static Map<Object?, Object?> _map(Object? raw, Set<String> fields) {
     if (raw is! Map ||

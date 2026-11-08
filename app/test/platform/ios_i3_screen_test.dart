@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
 import 'package:ustc_assistant_m0/app/agent_workspace_page.dart';
 import 'package:ustc_assistant_m0/app/demo_runtime.dart';
+import 'package:ustc_assistant_m0/app/diagnostics_panel.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
 import 'package:ustc_assistant_m0/core/contracts.dart';
@@ -137,6 +139,18 @@ void main() {
       );
       expect(find.byType(AgentWorkspacePage), findsNothing);
       expect(find.byIcon(Icons.mic_none_rounded), findsNothing);
+      expect(find.byType(DiagnosticsExportButton), findsOneWidget);
+      expect(
+        identical(
+          tester
+              .widget<DiagnosticsExportButton>(
+                find.byType(DiagnosticsExportButton),
+              )
+              .diagnostics,
+          bootstrap.diagnostics,
+        ),
+        isTrue,
+      );
       expect(find.text('配置晨报模型'), findsNothing);
 
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
@@ -188,6 +202,47 @@ void main() {
     },
     timeout: const Timeout(Duration(seconds: 45)),
   );
+
+  testWidgets('startup failure keeps a safe diagnostic export available', (
+    tester,
+  ) async {
+    const channel = MethodChannel('ustc_assistant/platform_v1');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          channel,
+          (call) async => <String, Object?>{
+            'revision': 'unknown',
+            'bundleId': 'cn.ustcassistant.ios.private',
+            'authentication': 'manual',
+            'notificationBackend': 'user-notifications-v1',
+          },
+        );
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+    await tester.pumpWidget(
+      IOSI3App(
+        openBootstrap: (_) async {
+          throw const AppFailure(FailureCode.unsafeDirectory);
+        },
+      ),
+    );
+    await _pumpFrames(tester);
+    expect(find.byType(DiagnosticsExportButton), findsOneWidget);
+    final export = tester.widget<DiagnosticsExportButton>(
+      find.byType(DiagnosticsExportButton),
+    );
+    final contents = await export.diagnostics.exportRecent();
+    final payload = jsonDecode(contents) as Map<String, Object?>;
+    expect(payload['coverage'], 'startup_error_only');
+    expect(payload['complete'], isFalse);
+    expect(payload['records'], isNotEmpty);
+    expect(contents, contains('applicationFailed'));
+    expect(contents, isNot(contains('cn.ustcassistant.ios.private')));
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(tester.takeException(), isNull);
+  });
 }
 
 Future<void> _drainTestRuntime(

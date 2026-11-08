@@ -9,6 +9,8 @@ import 'app/agent_settings_panel.dart';
 import 'app/app_design.dart';
 import 'app/calendar_workspace_page.dart';
 import 'app/demo_runtime.dart';
+import 'app/diagnostic_error_hooks.dart';
+import 'app/diagnostics_panel.dart';
 import 'app/jw_sync_panel.dart';
 import 'app/maintenance_recovery_page.dart';
 import 'app/m6_settings_panel.dart';
@@ -19,10 +21,12 @@ import 'app/young_sync_panel.dart';
 import 'core/agenda_contract.dart';
 import 'core/calendar_contract.dart';
 import 'core/contracts.dart';
+import 'core/diagnostics_contract.dart';
 import 'core/morning_brief_contract.dart';
 import 'core/reminder_contract.dart';
 import 'core/settings_contract.dart';
 import 'platform/ios_runtime_platform_factory.dart';
+import 'platform/transient_diagnostics.dart';
 
 const _revision = String.fromEnvironment(
   'USTC_BUILD_REVISION',
@@ -117,6 +121,10 @@ final class _IOSI3ScreenState extends State<_IOSI3Screen> {
   StreamSubscription<ReminderTarget>? _reminderNavigation;
   StreamSubscription<MorningRuntimeView>? _morningChanges;
   late final AppLifecycleListener _lifecycle;
+  final _startupDiagnostics = TransientDiagnostics(
+    versions: const DiagnosticVersions(revision: _revision),
+  );
+  DiagnosticErrorHooks? _diagnosticErrors;
   final _messengerKey = GlobalKey<ScaffoldMessengerState>();
   String? _failure;
   String _nativeRevision = 'unknown';
@@ -134,9 +142,18 @@ final class _IOSI3ScreenState extends State<_IOSI3Screen> {
   int _runtimeGeneration = 0;
   int _routeGeneration = 0;
 
+  DiagnosticsPort get _diagnostics =>
+      _bootstrap?.diagnostics ?? _startupDiagnostics;
+
+  void _bindDiagnosticErrors() {
+    _diagnosticErrors?.dispose();
+    _diagnosticErrors = DiagnosticErrorHooks(_diagnostics);
+  }
+
   @override
   void initState() {
     super.initState();
+    _bindDiagnosticErrors();
     _lifecycle = AppLifecycleListener(
       onStateChange: _onLifecycleStateChanged,
       onExitRequested: () async {
@@ -158,6 +175,8 @@ final class _IOSI3ScreenState extends State<_IOSI3Screen> {
     _reminderNavigation?.cancel();
     _morningChanges?.cancel();
     _lifecycle.dispose();
+    _diagnosticErrors?.dispose();
+    unawaited(_startupDiagnostics.close());
     final bootstrap = _bootstrap;
     if (bootstrap != null) unawaited(bootstrap.close());
     super.dispose();
@@ -201,6 +220,7 @@ final class _IOSI3ScreenState extends State<_IOSI3Screen> {
         return;
       }
       _bootstrap = opened;
+      _bindDiagnosticErrors();
       final runtime = opened.runtime;
       final maintenanceBlocksProduct =
           opened.settings.settingsView.maintenance.blocksProduct;
@@ -218,6 +238,7 @@ final class _IOSI3ScreenState extends State<_IOSI3Screen> {
       if (opened != null && !identical(_bootstrap, opened)) {
         // A partially assembled owner remains available for a safe retry.
         _bootstrap = opened;
+        _bindDiagnosticErrors();
       }
       _recordFailure(error);
     }
@@ -278,6 +299,7 @@ final class _IOSI3ScreenState extends State<_IOSI3Screen> {
         _failure = 'closed';
         _busy = false;
       });
+      _bindDiagnosticErrors();
     } on Object catch (error) {
       _recordFailure(error);
     }
@@ -301,6 +323,18 @@ final class _IOSI3ScreenState extends State<_IOSI3Screen> {
       };
       _busy = false;
     });
+    try {
+      _diagnostics.record(
+        DiagnosticEvent(
+          name: DiagnosticEventName.applicationFailed,
+          stage: DiagnosticStage.startup,
+          outcome: DiagnosticOutcome.failure,
+          code: diagnosticCode(_failure),
+        ),
+      );
+    } on Object {
+      // The startup result remains usable if diagnostics are unavailable.
+    }
   }
 
   bool _isResumed() {
@@ -656,6 +690,7 @@ final class _IOSI3ScreenState extends State<_IOSI3Screen> {
           appBar: AppBar(
             title: Text(const ['日程', '来源', '提醒'][_selectedTab]),
             actions: [
+              DiagnosticsExportButton(diagnostics: _diagnostics),
               if (_revisionMatches == false)
                 Padding(
                   padding: const EdgeInsets.only(right: 12),
@@ -752,7 +787,10 @@ final class _IOSI3ScreenState extends State<_IOSI3Screen> {
   Widget _startupScaffold(Widget body) => ScaffoldMessenger(
     key: _messengerKey,
     child: Scaffold(
-      appBar: AppBar(title: const Text('日程')),
+      appBar: AppBar(
+        title: const Text('日程'),
+        actions: [DiagnosticsExportButton(diagnostics: _diagnostics)],
+      ),
       body: SafeArea(child: body),
     ),
   );

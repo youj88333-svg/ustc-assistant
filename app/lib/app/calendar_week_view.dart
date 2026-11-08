@@ -630,12 +630,12 @@ final class CalendarWeekView extends StatelessWidget {
     final occurrence = segment.occurrence;
     final colors = calendarColorsForTitle(occurrence.title);
     final kind = occurrence.reference.identity.kind;
-    final academic = occurrence.academicDetails;
     final prefix = segment.continuesBefore || clippedAtTeachingStart
         ? '← '
         : '';
     final suffix = segment.continuesAfter ? ' →' : '';
     final location = occurrence.location.trim();
+    final tileLocation = _weekTileLocation(occurrence);
     final title =
         '$prefix${occurrence.title}$suffix'
         '${strip && location.isNotEmpty ? ' · $location' : ''}';
@@ -676,10 +676,15 @@ final class CalendarWeekView extends StatelessWidget {
                 final contentHeight = math
                     .max(0, constraints.maxHeight - verticalPadding * 2)
                     .toDouble();
-                if (contentWidth < 30 * textScale) {
-                  final hasConflict = statusItems.any(
-                    (status) => status.shortLabel.startsWith('冲'),
-                  );
+                final hasConflict = statusItems.any(
+                  (status) => status.shortLabel.startsWith('冲'),
+                );
+                // One Chinese glyph can still carry a useful title in a narrow
+                // seven-day column. Scaling must not turn the entire week into
+                // anonymous dots when there is room for readable text.
+                if (contentWidth < (strip ? 20 : 12) * textScale ||
+                    contentHeight < 12 * textScale ||
+                    hasConflict && contentWidth < 30 * textScale) {
                   final markSize = math
                       .min(12.0, math.max(0.0, contentWidth - 2))
                       .toDouble();
@@ -720,41 +725,24 @@ final class CalendarWeekView extends StatelessWidget {
                         constraints.maxWidth >= 160 * textScale ? 2 : 1,
                       )
                     : statusItems;
-                final detailLineHeight = 14.0 * textScale + 2;
-                var remainingHeight = contentHeight - 18 * textScale;
-                final locationAvailable =
-                    location.isNotEmpty ||
-                    (_isJwAcademicKind(kind) && academic != null);
+                final detailLineHeight = 11.5 * textScale + 2;
+                final minimumTitleHeight = 13.0 * textScale;
                 final showLocation =
                     !strip &&
-                    locationAvailable &&
-                    remainingHeight >= detailLineHeight;
-                if (showLocation) remainingHeight -= detailLineHeight;
-                final teacherSummary = academic?.teachers.join('、') ?? '';
-                final teacherAvailable =
-                    academic != null &&
-                    (kind == CalendarKind.course || teacherSummary.isNotEmpty);
-                final showTeachers =
-                    !strip &&
-                    teacherAvailable &&
-                    remainingHeight >= detailLineHeight;
-                if (showTeachers) remainingHeight -= detailLineHeight;
-                final showTime = !strip && remainingHeight >= detailLineHeight;
-                final lineHeight = 16 * textScale;
+                    tileLocation.isNotEmpty &&
+                    contentWidth >= 36 * textScale &&
+                    contentHeight >= minimumTitleHeight + detailLineHeight + 2;
+                final titleFontSize = strip
+                    ? 10.0
+                    : constraints.maxWidth < 64 * textScale
+                    ? 11.0
+                    : 12.0;
+                final lineHeight = titleFontSize * 1.1 * textScale;
                 final titleHeight =
-                    contentHeight -
-                    (showLocation ? detailLineHeight : 0) -
-                    (showTeachers ? detailLineHeight : 0) -
-                    (showTime ? detailLineHeight : 0);
+                    contentHeight - (showLocation ? detailLineHeight + 2 : 0);
                 final titleLines = strip
                     ? 1
                     : (titleHeight / lineHeight).floor().clamp(1, 3);
-                final displayedLocation = location.isNotEmpty
-                    ? location
-                    : '本次来源未提供';
-                final displayedTeachers = teacherSummary.isEmpty
-                    ? '本次来源未提供'
-                    : teacherSummary;
                 final heading = Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -771,7 +759,7 @@ final class CalendarWeekView extends StatelessWidget {
                         softWrap: !strip,
                         style: TextStyle(
                           color: colors.ink,
-                          fontSize: strip ? 10 : 12,
+                          fontSize: titleFontSize,
                           height: 1.1,
                           fontWeight: FontWeight.w600,
                         ),
@@ -789,7 +777,7 @@ final class CalendarWeekView extends StatelessWidget {
                     ],
                   ],
                 );
-                final content = !showTime && !showLocation && !showTeachers
+                final content = !showLocation
                     ? heading
                     : Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -798,38 +786,12 @@ final class CalendarWeekView extends StatelessWidget {
                           if (showLocation) ...[
                             const SizedBox(height: 2),
                             Text(
-                              '地点：$displayedLocation',
+                              tileLocation,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 color: colors.ink.withValues(alpha: .82),
-                                fontSize: 10,
-                                height: 1.2,
-                              ),
-                            ),
-                          ],
-                          if (showTeachers) ...[
-                            const SizedBox(height: 2),
-                            Text(
-                              '教师：$displayedTeachers',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: colors.ink.withValues(alpha: .82),
-                                fontSize: 10,
-                                height: 1.2,
-                              ),
-                            ),
-                          ],
-                          if (showTime) ...[
-                            const SizedBox(height: 2),
-                            Text(
-                              actualTime,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                color: colors.ink.withValues(alpha: .82),
-                                fontSize: 10,
+                                fontSize: 9.5,
                                 height: 1.2,
                               ),
                             ),
@@ -1085,6 +1047,23 @@ final class _SegmentLane {
 
 bool _isJwAcademicKind(CalendarKind kind) =>
     kind == CalendarKind.course || kind == CalendarKind.exam;
+
+String _weekTileLocation(CalendarOccurrence occurrence) {
+  final academic = occurrence.academicDetails;
+  if (academic != null) {
+    for (final value in [
+      academic.room,
+      academic.roomCode,
+      academic.customPlace,
+    ]) {
+      final trimmed = value.trim();
+      if (trimmed.isNotEmpty) return trimmed;
+    }
+  }
+  final location = occurrence.location.trim();
+  if (location.isNotEmpty) return location;
+  return academic?.locationLabel.trim() ?? '';
+}
 
 String _weekTileTooltip(CalendarOccurrence occurrence, String time) {
   final kind = occurrence.reference.identity.kind;

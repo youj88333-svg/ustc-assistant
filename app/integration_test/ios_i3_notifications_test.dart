@@ -149,6 +149,33 @@ Future<Map<String, Object>> _run() async {
     report['actualPendingRoundtripAndCapacityPreservesC3'] = true;
     debugPrint('I3 phase: real OS readback and 60 of 65 expectations');
 
+    // Reproduce the phone's full-queue test failure against UserNotifications,
+    // rather than only a synthetic notification adapter. A test borrows the
+    // farthest planned slot, retains every business expectation, then refills.
+    await coordinator.testNotification().timeout(_operationTimeout);
+    queue = await platform.pending();
+    expect(queue, hasLength(60));
+    expect(queue.where((item) => item.id == 'm6-check'), hasLength(1));
+    expect(
+      (await store.features.prepareReminderPublication()).desired,
+      hasLength(65),
+    );
+    await coordinator.refresh().timeout(_operationTimeout);
+    expect(
+      (await platform.pending()).where((item) => item.id == 'm6-check'),
+      hasLength(1),
+      reason: 'a foreground reconcile must preserve the accepted short test',
+    );
+    await Future<void>.delayed(const Duration(seconds: 7));
+    await coordinator.refresh().timeout(_operationTimeout);
+    queue = await platform.pending();
+    expect(queue, hasLength(60));
+    expect(queue.any((item) => item.id == 'm6-check'), isFalse);
+    publication = await store.features.prepareReminderPublication();
+    _expectNearest(publication, queue);
+    report['fullQueueTestAcceptedThenBusinessSlotRefilled'] = true;
+    debugPrint('I3 phase: full queue test accepted, expired and slot refilled');
+
     // Capture before the coordinator subscribes, then attach the UI listener
     // later. This is an injected delegate-path test, not a real system tap.
     final clicked = publication.desired.firstWhere(

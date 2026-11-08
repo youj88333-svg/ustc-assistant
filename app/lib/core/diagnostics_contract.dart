@@ -4,6 +4,7 @@
 import 'dart:convert';
 
 import 'agent_parameter_issue.dart';
+import 'reminder_contract.dart';
 
 const diagnosticProtocolVersion = 'ustc-diagnostics-v1';
 const diagnosticMaximumRecordBytes = 2048;
@@ -58,6 +59,9 @@ enum DiagnosticEventName {
   reminderReconcileStarted,
   reminderReconcileCompleted,
   reminderFailed,
+  reminderTestStarted,
+  reminderTestCompleted,
+  reminderTestFailed,
   morningBriefStarted,
   morningBriefCompleted,
   morningBriefFailed,
@@ -126,6 +130,7 @@ enum DiagnosticModelService { school, deepseek }
 enum DiagnosticCode {
   platformUnavailable,
   disabledBySystem,
+  capacityReached,
   publishFailed,
   cancelFailed,
   factsChanged,
@@ -561,6 +566,111 @@ final class DiagnosticTrace {
   String toString() => 'DiagnosticTrace';
 }
 
+enum DiagnosticNotificationOperation { reconcile, test }
+
+enum DiagnosticNotificationStep {
+  preparing,
+  permissions,
+  binding,
+  readingQueue,
+  makingSpace,
+  registering,
+  verifying,
+  recording,
+  completed,
+}
+
+/// Closed, value-free notification state for diagnosing OS registration.
+final class DiagnosticNotificationMetadata {
+  const DiagnosticNotificationMetadata({
+    required this.operation,
+    required this.step,
+    this.desired,
+    this.accepted,
+    this.pending,
+    this.capacity,
+    this.errorDomain,
+    this.errorCode,
+  });
+
+  final DiagnosticNotificationOperation operation;
+  final DiagnosticNotificationStep step;
+  final int? desired, accepted, pending, capacity;
+  final NotificationErrorDomain? errorDomain;
+  final int? errorCode;
+
+  Map<String, Object?> toSafeMap() {
+    for (final count in [desired, accepted, pending, capacity]) {
+      if (count != null && (count < 0 || count > 2048)) {
+        throw const FormatException('diagnostic_notification_count');
+      }
+    }
+    if (errorCode != null && (errorCode! < -32768 || errorCode! > 32767)) {
+      throw const FormatException('diagnostic_notification_code');
+    }
+    return {
+      'operation': operation.name,
+      'step': step.name,
+      if (desired != null) 'desired': desired,
+      if (accepted != null) 'accepted': accepted,
+      if (pending != null) 'pending': pending,
+      if (capacity != null) 'capacity': capacity,
+      if (errorDomain != null) 'errorDomain': errorDomain!.name,
+      if (errorCode != null) 'errorCode': errorCode,
+    };
+  }
+
+  factory DiagnosticNotificationMetadata.fromSafeMap(Map<String, dynamic> raw) {
+    const fields = {
+      'operation',
+      'step',
+      'desired',
+      'accepted',
+      'pending',
+      'capacity',
+      'errorDomain',
+      'errorCode',
+    };
+    if (raw.keys.any((key) => !fields.contains(key))) {
+      throw const FormatException('diagnostic_notification_shape');
+    }
+    final operation = DiagnosticNotificationOperation.values
+        .where((value) => value.name == raw['operation'])
+        .firstOrNull;
+    final step = DiagnosticNotificationStep.values
+        .where((value) => value.name == raw['step'])
+        .firstOrNull;
+    final domain = NotificationErrorDomain.values
+        .where((value) => value.name == raw['errorDomain'])
+        .firstOrNull;
+    if (operation == null ||
+        step == null ||
+        raw.containsKey('errorDomain') && domain == null) {
+      throw const FormatException('diagnostic_notification_enum');
+    }
+    int? number(String key) {
+      if (!raw.containsKey(key)) return null;
+      if (raw[key] is! int) {
+        throw const FormatException('diagnostic_notification_number');
+      }
+      return raw[key] as int;
+    }
+
+    final result = DiagnosticNotificationMetadata(
+      operation: operation,
+      step: step,
+      desired: number('desired'),
+      accepted: number('accepted'),
+      pending: number('pending'),
+      capacity: number('capacity'),
+      errorDomain: domain,
+      errorCode: number('errorCode'),
+    );
+    result.toSafeMap();
+    return result;
+  }
+}
+
 final class DiagnosticEvent {
   const DiagnosticEvent({
     required this.name,
@@ -575,6 +685,7 @@ final class DiagnosticEvent {
     this.issue,
     this.context,
     this.source,
+    this.notification,
     this.elapsedMilliseconds,
     this.modelCalls,
     this.toolCalls,
@@ -593,6 +704,7 @@ final class DiagnosticEvent {
   final AgentParameterIssue? issue;
   final DiagnosticContextMetadata? context;
   final DiagnosticSourceMetadata? source;
+  final DiagnosticNotificationMetadata? notification;
   final int? elapsedMilliseconds, modelCalls, toolCalls, count, httpStatus;
 }
 
@@ -627,6 +739,7 @@ final class DiagnosticRecord {
     }
     event.context?.toSafeMap();
     event.source?.toSafeMap();
+    event.notification?.toSafeMap();
   }
   final DateTime atUtc;
   final DiagnosticEvent event;
@@ -649,6 +762,8 @@ final class DiagnosticRecord {
     if (event.issue != null) 'validation': event.issue!.toSafeMap(),
     if (event.context != null) 'context': event.context!.toSafeMap(),
     if (event.source != null) 'source': event.source!.toSafeMap(),
+    if (event.notification != null)
+      'notification': event.notification!.toSafeMap(),
     if (event.elapsedMilliseconds != null)
       'elapsedMs': event.elapsedMilliseconds,
     if (event.modelCalls != null) 'modelCalls': event.modelCalls,
@@ -691,6 +806,7 @@ final class DiagnosticRecord {
             'validation',
             'context',
             'source',
+            'notification',
             'elapsedMs',
             'modelCalls',
             'toolCalls',
@@ -762,6 +878,14 @@ final class DiagnosticRecord {
       }
       source = DiagnosticSourceMetadata.fromSafeMap(value);
     }
+    DiagnosticNotificationMetadata? notification;
+    if (raw.containsKey('notification')) {
+      final value = raw['notification'];
+      if (value is! Map<String, dynamic>) {
+        throw const FormatException('diagnostic_notification_shape');
+      }
+      notification = DiagnosticNotificationMetadata.fromSafeMap(value);
+    }
     final name = optionalEnum('event', DiagnosticEventName.values);
     if (name == null || raw.containsKey('trace') && raw['trace'] is! String) {
       throw const FormatException('diagnostic_event');
@@ -823,6 +947,7 @@ final class DiagnosticRecord {
         issue: issue,
         context: context,
         source: source,
+        notification: notification,
         elapsedMilliseconds: number('elapsedMs'),
         modelCalls: number('modelCalls'),
         toolCalls: number('toolCalls'),

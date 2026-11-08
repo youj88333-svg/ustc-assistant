@@ -45,6 +45,47 @@ void main() {
   }
 
   test(
+    'native failure keeps only classified domain and bounded numeric code',
+    () async {
+      Object? details = {'domain': 'notifications', 'code': 1};
+      messenger.setMockMethodCallHandler(channel, (_) async {
+        throw PlatformException(
+          code: 'publish_failed',
+          message: 'private OS text',
+          details: details,
+        );
+      });
+      final adapter = createAdapter();
+      Future<ReminderFailure> failure() async {
+        try {
+          await adapter.schedule(_request());
+          fail('schedule should fail');
+        } on ReminderFailure catch (error) {
+          return error;
+        }
+      }
+
+      final first = await failure();
+      expect(first.code, ReminderFailureCode.publishFailed);
+      expect(
+        first.nativeFailure?.domain,
+        NotificationErrorDomain.notifications,
+      );
+      expect(first.nativeFailure?.code, 1);
+      expect(first.toString(), isNot(contains('private OS text')));
+      for (final invalid in [
+        {'domain': 'notifications', 'code': 1, 'raw': 'secret'},
+        {'domain': 'private domain', 'code': 1},
+        {'domain': 'notifications', 'code': true},
+        {'domain': 'notifications', 'code': 32768},
+      ]) {
+        details = invalid;
+        expect((await failure()).nativeFailure, isNull);
+      }
+    },
+  );
+
+  test(
     'strict capability has twelve fields and consent stays explicit',
     () async {
       final calls = <MethodCall>[];

@@ -260,19 +260,40 @@ class VerifyI3PackageTests(unittest.TestCase):
         )
 
     def test_i3_debug_marker_is_rejected_from_runner_and_aot(self) -> None:
-        ipa = self.ipa(runner_payload=RUNNER_NATIVE_PAYLOAD + b"|i3Fixture")
-        self.assert_reason(
-            "fixture_entry_point_present",
-            lambda: verifier.verify_package(ipa, REVISION),
-        )
+        for marker in (b"i3Fixture", b"i3ExportFixture"):
+            with self.subTest(marker=marker):
+                ipa = self.ipa(runner_payload=RUNNER_NATIVE_PAYLOAD + b"|" + marker)
+                self.assert_reason(
+                    "fixture_entry_point_present",
+                    lambda: verifier.verify_package(ipa, REVISION),
+                )
+                ipa = self.ipa(
+                    app_framework_payload=b"aot:" + REVISION.encode("ascii") + b"|" + marker
+                )
+                self.assert_reason(
+                    "fixture_entry_point_present",
+                    lambda: verifier.verify_package(ipa, REVISION),
+                )
 
+    def test_declared_export_requires_system_document_picker_wiring(self) -> None:
+        export_markers = verifier._I1.I3_DIAGNOSTIC_EXPORT_WIRING_MARKERS
+        for payload in (b"", b"\n".join(export_markers[:-1])):
+            ipa = self.ipa(
+                manifest_updates={"diagnosticExport": "system-documents-v1"},
+                runner_payload=RUNNER_NATIVE_PAYLOAD + b"\n" + payload,
+            )
+            self.assert_reason(
+                "diagnostic_export_native_wiring_missing",
+                lambda: verifier.verify_package(ipa, REVISION),
+            )
         ipa = self.ipa(
-            app_framework_payload=b"aot:" + REVISION.encode("ascii") + b"|i3Fixture"
+            manifest_updates={"diagnosticExport": "system-documents-v1"},
+            runner_payload=RUNNER_NATIVE_PAYLOAD + b"\n" + b"\n".join(export_markers),
         )
-        self.assert_reason(
-            "fixture_entry_point_present",
-            lambda: verifier.verify_package(ipa, REVISION),
-        )
+        report = verifier.verify_package(ipa, REVISION)
+        self.assertTrue(report["checks"]["diagnosticExportNativeWiringStringsPresent"])
+        ipa = self.ipa(manifest_updates={"diagnosticExport": "arbitrary-file"})
+        self.assert_reason("invalid_manifest", lambda: verifier.verify_package(ipa, REVISION))
 
     def test_stage_three_rejects_background_mode_and_remote_push_entitlement(self) -> None:
         ipa = self.ipa(info_extras={"UIBackgroundModes": ["remote-notification"]})

@@ -12,6 +12,7 @@ enum ReminderFailureCode {
   maintenance,
   platformUnavailable,
   disabledBySystem,
+  capacityReached,
   publishFailed,
   cancelFailed,
   cleanupPending,
@@ -20,10 +21,20 @@ enum ReminderFailureCode {
 }
 
 final class ReminderFailure implements Exception {
-  const ReminderFailure(this.code);
+  const ReminderFailure(this.code, {this.nativeFailure});
   final ReminderFailureCode code;
+  final NotificationNativeFailure? nativeFailure;
   @override
   String toString() => 'ReminderFailure(${code.name})';
+}
+
+enum NotificationErrorDomain { notifications, cocoa, posix, other, none }
+
+/// Numeric OS failure context only. Display content and NSError text stay out.
+final class NotificationNativeFailure {
+  const NotificationNativeFailure(this.domain, this.code);
+  final NotificationErrorDomain domain;
+  final int? code;
 }
 
 final class ReminderRule {

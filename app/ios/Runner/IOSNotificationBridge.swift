@@ -36,8 +36,20 @@ final class IOSNotificationBridge: NSObject, UNUserNotificationCenterDelegate {
     }
   }
 
-  private static func failure(_ failure: IOSNotificationFailure) -> FlutterError {
-    FlutterError(code: failure.rawValue, message: nil, details: nil)
+  private static func failure(_ failure: IOSNotificationFailure, systemError: Error? = nil) -> FlutterError {
+    guard let error = systemError as NSError? else {
+      return FlutterError(code: failure.rawValue, message: nil, details: nil)
+    }
+    let domain: String
+    switch error.domain {
+    case "UNErrorDomain": domain = "notifications"
+    case NSCocoaErrorDomain: domain = "cocoa"
+    case NSPOSIXErrorDomain: domain = "posix"
+    default: domain = "other"
+    }
+    let code: Any = (-32768...32767).contains(error.code) ? error.code : NSNull()
+    return FlutterError(code: failure.rawValue, message: nil,
+      details: ["domain": domain, "code": code])
   }
 
   private func enqueue(reply: @escaping FlutterResult, operation: @escaping (@escaping () -> Void) -> Void) {
@@ -71,7 +83,7 @@ final class IOSNotificationBridge: NSObject, UNUserNotificationCenterDelegate {
         center.requestAuthorization(options: [.alert, .sound]) { [weak self] _, error in
           DispatchQueue.main.async {
             guard let self else { reply(Self.failure(.closed)); return }
-            guard error == nil else { reply(Self.failure(.publishFailed)); return }
+            guard error == nil else { reply(Self.failure(.publishFailed, systemError: error)); return }
             self.capability(reply)
           }
         }
@@ -115,7 +127,7 @@ final class IOSNotificationBridge: NSObject, UNUserNotificationCenterDelegate {
         try noArguments(call)
         publication = nil
         activations.removeAll(); activationKeys.removeAll()
-        clearOwned { failure in reply(failure.map(Self.failure)) }
+        clearOwned { failure in reply(failure.map { Self.failure($0) }) }
       case "takeActivations":
         try noArguments(call)
         let result = activations
@@ -207,7 +219,7 @@ final class IOSNotificationBridge: NSObject, UNUserNotificationCenterDelegate {
                   self.center.removePendingNotificationRequests(withIdentifiers: [request.identity.systemID])
                   reply(Self.failure(.closed)); return
                 }
-                reply(error == nil ? nil : Self.failure(.publishFailed))
+                reply(error == nil ? nil : Self.failure(.publishFailed, systemError: error))
               }
             }
           }

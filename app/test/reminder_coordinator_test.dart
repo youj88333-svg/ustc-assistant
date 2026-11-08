@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,6 +7,7 @@ import 'package:ustc_assistant_m0/core/calendar_contract.dart';
 import 'package:ustc_assistant_m0/core/contracts.dart';
 import 'package:ustc_assistant_m0/core/reminder_contract.dart';
 import 'package:ustc_assistant_m0/jobs/reminder_coordinator.dart';
+import 'package:ustc_assistant_m0/platform/transient_diagnostics.dart';
 
 const _context = CalendarContext(
   owner: 'synthetic-owner',
@@ -333,6 +335,259 @@ void main() {
     await coordinator.close();
     await data._changes.close();
   });
+
+  test(
+    'concurrent test presses cannot overlap while reading preferences',
+    () async {
+      final data = _FakeReminderData(publication: _publication())
+        ..inspectGate = Completer<void>();
+      final platform = _FakeNotifications();
+      final coordinator = ReminderCoordinator(data: data, platform: platform);
+      final first = coordinator.testNotification();
+      await expectLater(
+        coordinator.testNotification(),
+        throwsA(_failure(ReminderFailureCode.maintenance)),
+      );
+      expect(platform.scheduleCalls, 0);
+      data.inspectGate!.complete();
+      await first;
+      expect(platform.scheduleCalls, 1);
+      await coordinator.close();
+      await data._changes.close();
+    },
+  );
+
+  test(
+    'reopening refills an expired test slot and maintenance keeps it empty',
+    () async {
+      final now = DateTime.utc(2026, 11, 8);
+      final requests = List.generate(
+        3,
+        (index) => _request(
+          id: 'planned_$index',
+          deliveryAtUtc: now.add(Duration(hours: 1, minutes: index)),
+        ),
+      );
+      final data = _FakeReminderData(
+        publication: _publication(desired: requests.map(_mapping).toList()),
+      );
+      const capability = NotificationCapability(
+        available: true,
+        enabledBySystem: true,
+        schedulesAfterExit: true,
+        activationAvailable: true,
+        maximumPending: 2,
+      );
+      final platform = _FakeNotifications(capability: capability)
+        ..pendingItems.addAll(requests.take(2).map(_pending));
+      final first = ReminderCoordinator(
+        data: data,
+        platform: platform,
+        clock: FixedClock(now),
+      );
+      await first.testNotification();
+      await first.close();
+      expect(
+        platform.pendingItems.any((item) => item.id == 'm6-check'),
+        isTrue,
+      );
+      // The OS delivers the short test while the Dart runtime is closed.
+      platform.pendingItems.removeWhere((item) => item.id == 'm6-check');
+      final reopenedPlatform = _FakeNotifications(capability: capability)
+        ..pendingItems.addAll(platform.pendingItems);
+      final reopened = ReminderCoordinator(
+        data: data,
+        platform: reopenedPlatform,
+        clock: FixedClock(now.add(const Duration(seconds: 7))),
+      );
+      await reopened.refresh();
+      expect(reopenedPlatform.pendingItems.map((item) => item.id).toSet(), {
+        'planned_0',
+        'planned_1',
+      });
+      expect(reopened.view.accepted, 2);
+      expect(reopened.view.unregistered, 1);
+      expect(data.publications.single.desired, hasLength(3));
+      await reopened.testNotification();
+      await reopened.prepareForMaintenance();
+      await reopened.clearForMaintenance();
+      expect(reopenedPlatform.pendingItems, isEmpty);
+      await reopened.close();
+      await data._changes.close();
+    },
+  );
+
+  test('full 60 of 61 queue lends a test slot and refills after delivery', () {
+    fakeAsync((time) {
+      final now = DateTime.utc(2026, 11, 8);
+      final requests = List.generate(
+        61,
+        (index) => _request(
+          id: 'planned_$index',
+          deliveryAtUtc: now.add(Duration(hours: 1, minutes: index)),
+        ),
+      );
+      final data = _FakeReminderData(
+        publication: _publication(desired: requests.map(_mapping).toList()),
+      );
+      final platform = _FakeNotifications(
+        capability: const NotificationCapability(
+          available: true,
+          enabledBySystem: true,
+          schedulesAfterExit: true,
+          activationAvailable: true,
+          maximumPending: 60,
+        ),
+      )..pendingItems.addAll(requests.take(60).map(_pending));
+      final coordinator = ReminderCoordinator(
+        data: data,
+        platform: platform,
+        clock: _ElapsedClock(now, () => time.elapsed),
+      );
+      Object? failure;
+      var completed = false;
+      unawaited(
+        coordinator.testNotification().then(
+          (_) => completed = true,
+          onError: (Object error) {
+            failure = error;
+          },
+        ),
+      );
+      time.flushMicrotasks();
+      expect(failure, isNull);
+      expect(completed, isTrue);
+      expect(platform.pendingItems, hasLength(60));
+      expect(
+        platform.pendingItems.where((item) => item.id == 'm6-check'),
+        hasLength(1),
+      );
+      expect(
+        platform.pendingItems.any((item) => item.id == 'planned_59'),
+        isFalse,
+      );
+      expect(data.cancelledIds, ['planned_59']);
+      expect(data.publications.single.desired, hasLength(61));
+      time.elapse(const Duration(milliseconds: 250));
+      time.flushMicrotasks();
+      expect(coordinator.view.accepted, 59);
+      expect(
+        platform.pendingItems.any((item) => item.id == 'm6-check'),
+        isTrue,
+      );
+      platform.pendingItems.removeWhere((item) => item.id == 'm6-check');
+      time.elapse(const Duration(seconds: 6));
+      time.flushMicrotasks();
+      expect(platform.pendingItems, hasLength(60));
+      expect(
+        platform.pendingItems.map((item) => item.id).toSet(),
+        requests.take(60).map((request) => request.id).toSet(),
+      );
+      expect(coordinator.view.accepted, 60);
+      expect(coordinator.view.unregistered, 1);
+      unawaited(coordinator.close());
+      unawaited(data._changes.close());
+      time.flushMicrotasks();
+      expect(time.pendingTimers, isEmpty);
+    });
+  });
+
+  test(
+    'failed test restores the lent slot and records only safe failure context',
+    () async {
+      final now = DateTime.utc(2026, 11, 8);
+      final requests = List.generate(
+        2,
+        (index) => _request(
+          id: 'planned_$index',
+          deliveryAtUtc: now.add(Duration(hours: 1, minutes: index)),
+        ),
+      );
+      final data = _FakeReminderData(
+        publication: _publication(desired: requests.map(_mapping).toList()),
+      );
+      final platform =
+          _FakeNotifications(
+              capability: const NotificationCapability(
+                available: true,
+                enabledBySystem: true,
+                schedulesAfterExit: true,
+                activationAvailable: true,
+                maximumPending: 2,
+              ),
+            )
+            ..pendingItems.addAll(requests.map(_pending))
+            ..failScheduleId = 'm6-check';
+      final diagnostics = TransientDiagnostics();
+      final coordinator = ReminderCoordinator(
+        data: data,
+        platform: platform,
+        clock: FixedClock(now),
+        diagnostics: diagnostics,
+      );
+      await expectLater(
+        coordinator.testNotification(),
+        throwsA(_failure(ReminderFailureCode.publishFailed)),
+      );
+      expect(
+        platform.pendingItems.map((item) => item.id).toSet(),
+        requests.map((request) => request.id).toSet(),
+      );
+      final export =
+          jsonDecode(await diagnostics.exportRecent()) as Map<String, dynamic>;
+      final failed = (export['records'] as List)
+          .cast<Map<String, dynamic>>()
+          .singleWhere((record) => record['event'] == 'reminderTestFailed');
+      expect(failed['notification'], containsPair('step', 'registering'));
+      expect(failed['notification'], containsPair('pending', 1));
+      expect(
+        failed['notification'],
+        containsPair('errorDomain', 'notifications'),
+      );
+      expect(failed['notification'], containsPair('errorCode', 1));
+      expect(jsonEncode(failed), isNot(contains('planned_')));
+      await coordinator.close();
+      await data._changes.close();
+      await diagnostics.close();
+    },
+  );
+
+  test(
+    'test cannot evict an unknown preserved request to obtain a slot',
+    () async {
+      final now = DateTime.utc(2026, 11, 8);
+      final unknown = _request(
+        id: 'unknown_prior',
+        deliveryAtUtc: now.add(const Duration(hours: 2)),
+      );
+      final data = _FakeReminderData(
+        publication: _publication(prior: [_mapping(unknown, accepted: true)]),
+      );
+      final platform = _FakeNotifications(
+        capability: const NotificationCapability(
+          available: true,
+          enabledBySystem: true,
+          schedulesAfterExit: true,
+          activationAvailable: true,
+          maximumPending: 1,
+        ),
+      )..pendingItems.add(_pending(unknown));
+      final coordinator = ReminderCoordinator(
+        data: data,
+        platform: platform,
+        clock: FixedClock(now),
+      );
+      await expectLater(
+        coordinator.testNotification(),
+        throwsA(_failure(ReminderFailureCode.capacityReached)),
+      );
+      expect(platform.pendingItems.single.id, 'unknown_prior');
+      expect(data.cancelledIds, isEmpty);
+      expect(platform.scheduleCalls, 0);
+      await coordinator.close();
+      await data._changes.close();
+    },
+  );
   test(
     'OS success with lost C3 acknowledgement replays from complete readback',
     () async {
@@ -908,6 +1163,7 @@ final class _FakeReminderData implements ReminderDataPort {
     ReminderFailureCode.storageFailed,
   );
   int _prepareCount = 0;
+  Completer<void>? inspectGate;
   ReminderPublication? invalidatedPublication;
 
   @override
@@ -915,6 +1171,7 @@ final class _FakeReminderData implements ReminderDataPort {
 
   @override
   Future<ReminderSettings> inspectReminders() async {
+    await inspectGate?.future;
     final publication = publications.first;
     return ReminderSettings(
       context: publication.context,
@@ -994,6 +1251,7 @@ class _FakeNotifications implements NotificationPlatformPort {
   int scheduleCalls = 0, cancelCalls = 0, clearCalls = 0, closeCalls = 0;
   int initializeCalls = 0;
   bool omitReadbackDetail = false, retainOnClear = false;
+  String? failScheduleId;
   void Function()? onSchedule;
 
   @override
@@ -1023,6 +1281,15 @@ class _FakeNotifications implements NotificationPlatformPort {
   Future<void> schedule(NotificationRequest request) async {
     scheduleCalls++;
     calls.add('schedule:${request.id}');
+    if (request.id == failScheduleId) {
+      throw const ReminderFailure(
+        ReminderFailureCode.publishFailed,
+        nativeFailure: NotificationNativeFailure(
+          NotificationErrorDomain.notifications,
+          1,
+        ),
+      );
+    }
     final started = scheduleStarted;
     if (started != null && !started.isCompleted) started.complete();
     final gate = scheduleGate;
