@@ -25,9 +25,14 @@ struct IOSDiagnosticExportPolicyCheck {
       of: "\"records\":[]",
       with: "\"records\":[\"synthetic hidden value\"],\"records\":[]"
     )
-    guard let sanitized = try? IOSDiagnosticExportPolicy.canonicalJSON(hidden),
-          !String(decoding: sanitized, as: UTF8.self).contains("synthetic hidden value") else {
-      fatalError("duplicate-key source text was copied")
+    let escapedDuplicate = valid.replacingOccurrences(
+      of: "\"records\":[]",
+      with: "\"records\":[],\"\\u0072ecords\":[]"
+    )
+    for duplicate in [hidden, escapedDuplicate] {
+      guard (try? IOSDiagnosticExportPolicy.canonicalJSON(duplicate)) == nil else {
+        fatalError("ambiguous duplicate diagnostic key accepted")
+      }
     }
 
     let oversized = document(application: String(repeating: "x", count: IOSDiagnosticExportPolicy.maximumBytes))

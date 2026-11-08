@@ -35,7 +35,8 @@ enum IOSDiagnosticExportPolicy {
       throw IOSDiagnosticExportFailure.invalidInput
     }
 
-    guard let object = parsed as? [String: Any],
+    guard hasUniqueObjectKeys(input),
+          let object = parsed as? [String: Any],
           Set(object.keys) == fields,
           object["kind"] as? String == kind,
           let exportedAtUtc = object["exportedAtUtc"] as? String,
@@ -77,6 +78,53 @@ enum IOSDiagnosticExportPolicy {
     } catch {
       throw IOSDiagnosticExportFailure.invalidInput
     }
+  }
+
+  // Foundation's duplicate-key winner differs across OS versions. Reject the
+  // ambiguity instead of allowing a shadowed value into a saved diagnostic.
+  // JSONSerialization has already checked grammar; this pass only tracks
+  // object key strings, including escaped spellings of the same key.
+  private static func hasUniqueObjectKeys(_ data: Data) -> Bool {
+    let bytes = Array(data)
+    var objects: [Set<String>] = []
+    var index = 0
+    while index < bytes.count {
+      switch bytes[index] {
+      case 123:
+        objects.append([])
+      case 125:
+        guard !objects.isEmpty else { return false }
+        objects.removeLast()
+      case 34:
+        let start = index
+        index += 1
+        while index < bytes.count {
+          if bytes[index] == 92 {
+            index += 2
+          } else if bytes[index] == 34 {
+            break
+          } else {
+            index += 1
+          }
+        }
+        guard index < bytes.count else { return false }
+        var next = index + 1
+        while next < bytes.count && [9, 10, 13, 32].contains(bytes[next]) {
+          next += 1
+        }
+        if next < bytes.count && bytes[next] == 58 {
+          guard !objects.isEmpty,
+                let decoded = try? JSONSerialization.jsonObject(
+                  with: Data(bytes[start...index]), options: [.fragmentsAllowed]
+                ),
+                let key = decoded as? String,
+                objects[objects.count - 1].insert(key).inserted else { return false }
+        }
+      default: break
+      }
+      index += 1
+    }
+    return objects.isEmpty
   }
 
   private static func isBoolean(_ value: Any?) -> Bool {
