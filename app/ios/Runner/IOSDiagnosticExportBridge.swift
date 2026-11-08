@@ -145,7 +145,14 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
       return
     }
     if picker.isBeingDismissed, let transition = picker.transitionCoordinator {
-      transition.animate(alongsideTransition: nil) { _ in dismissed() }
+      let recheck = { [self, active] in
+        DispatchQueue.main.async { [self, active] in
+          guard flight === active else { return }
+          finishDismissalWait(active, response: response)
+        }
+      }
+      let registered = transition.animate(alongsideTransition: nil) { _ in recheck() }
+      if !registered { recheck() }
       return
     }
     if picker.isBeingDismissed {
@@ -168,6 +175,10 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
       picker.dismiss(animated: false) { [self, active] in
         completeAfterDismissal(active, response: response)
       }
+    } else if picker.viewIfLoaded?.window != nil {
+      DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [self, active] in
+        finishDismissalWait(active, response: response)
+      }
     } else {
       completeAfterDismissal(active, response: response)
     }
@@ -175,6 +186,11 @@ final class IOSDiagnosticExportBridge: NSObject, UIDocumentPickerDelegate, UIAda
 
   private func completeAfterDismissal(_ active: ExportFlight, response: ExportResponse) {
     guard flight === active, !active.completed else { return }
+    guard active.picker?.presentingViewController == nil,
+          active.picker?.viewIfLoaded?.window == nil else {
+      finishDismissalWait(active, response: response)
+      return
+    }
     active.completed = true
     let cleaned = cleanup(active.artifact)
     flight = nil

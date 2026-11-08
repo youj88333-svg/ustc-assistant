@@ -220,43 +220,45 @@ void main() {
         await tester.tap(
           find.byKey(const ValueKey('diagnostics-export-button')),
         );
-        Map<String, Object?>? exportState;
-        final exportWait = Stopwatch()..start();
-        while (exportWait.elapsed < _operationTimeout) {
-          await _pumpFrames(tester, count: 1);
-          await tester.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 150)),
-          );
-          exportState = await tester.runAsync(_inspectExport);
-          if (exportState?['presented'] == true) break;
-        }
-        if (exportState?['presented'] != true) {
-          final stage = await tester.runAsync(
-            () => _exportChannel
-                .invokeMethod<String>('i3ExportFixture', {
-                  'action': 'failureStage',
-                })
-                .timeout(_operationTimeout),
-          );
-          debugPrint('I3 workspace: native export stopped at $stage');
-        }
-        expect(exportState, {
-          'presented': true,
-          'tempFilePresent': true,
-          'busy': true,
-        });
-        final exportContents = (await tester.runAsync(
-          bootstrap.diagnostics.exportRecent,
-        ))!;
         await tester.runAsync(() async {
-          await expectLater(
-            const IOSDiagnosticExport().saveDiagnosticLog(exportContents),
-            throwsA(isA<DiagnosticsFailure>()),
-          );
-          await _exportChannel
-              .invokeMethod<void>('i3ExportFixture', {'action': 'cancel'})
-              .timeout(_operationTimeout);
+          try {
+            Map<String, Object?>? exportState;
+            final exportWait = Stopwatch()..start();
+            while (exportWait.elapsed < _operationTimeout) {
+              await Future<void>.delayed(const Duration(milliseconds: 150));
+              exportState = await _inspectExport();
+              if (exportState['presented'] == true) break;
+            }
+            if (exportState?['presented'] != true) {
+              final stage = await _exportChannel
+                  .invokeMethod<String>('i3ExportFixture', {
+                    'action': 'failureStage',
+                  })
+                  .timeout(_operationTimeout);
+              debugPrint('I3 workspace: native export stopped at $stage');
+            }
+            expect(exportState, {
+              'presented': true,
+              'tempFilePresent': true,
+              'busy': true,
+            });
+            final exportContents = await bootstrap.diagnostics.exportRecent();
+            await expectLater(
+              const IOSDiagnosticExport().saveDiagnosticLog(exportContents),
+              throwsA(isA<DiagnosticsFailure>()),
+            );
+          } finally {
+            // A native modal may pause Flutter and its rendering surface. Do
+            // not request a Flutter frame until the actual window is closed.
+            await _cancelExport();
+          }
+          expect(await _inspectExport(), {
+            'presented': false,
+            'tempFilePresent': false,
+            'busy': false,
+          });
         });
+        await _waitForFlutterFrames(tester);
         await _pumpFrames(tester);
         expect(await tester.runAsync(_inspectExport), {
           'presented': false,
@@ -319,7 +321,11 @@ void main() {
         };
       } finally {
         try {
-          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.runAsync(_cancelExport);
+          await _waitForFlutterFrames(tester);
+          if (tester.binding.framesEnabled) {
+            await tester.pumpWidget(const SizedBox.shrink());
+          }
           final bootstrap = capturedBootstrap;
           if (bootstrap != null) {
             await tester.runAsync(
@@ -372,6 +378,26 @@ Future<void> _saveSyntheticScreen(
 Future<Map<String, Object?>> _inspectExport() async => (await _exportChannel
     .invokeMapMethod<String, Object?>('i3ExportFixture', {'action': 'inspect'})
     .timeout(_operationTimeout))!;
+
+Future<void> _cancelExport() => _exportChannel
+    .invokeMethod<void>('i3ExportFixture', {'action': 'cancel'})
+    .timeout(_operationTimeout);
+
+Future<void> _waitForFlutterFrames(WidgetTester tester) async {
+  await tester.runAsync(() async {
+    final resumedWait = Stopwatch()..start();
+    while (!tester.binding.framesEnabled &&
+        resumedWait.elapsed < _operationTimeout) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    expect(
+      tester.binding.framesEnabled,
+      isTrue,
+      reason:
+          'native dismissal must restore actual Flutter rendering before pump',
+    );
+  });
+}
 
 Future<void> _seedDenseSchedule(DemoRuntime runtime) async {
   final day = beijingDay(runtime.clock.nowUtc);
