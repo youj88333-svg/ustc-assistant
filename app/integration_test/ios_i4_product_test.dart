@@ -22,6 +22,7 @@ import 'package:ustc_assistant_m0/app/calendar_workspace_contract.dart';
 import 'package:ustc_assistant_m0/app/calendar_workspace_page.dart';
 import 'package:ustc_assistant_m0/app/demo_runtime.dart';
 import 'package:ustc_assistant_m0/app/diagnostics_panel.dart';
+import 'package:ustc_assistant_m0/app/m0_app.dart';
 import 'package:ustc_assistant_m0/app/onboarding_page.dart';
 import 'package:ustc_assistant_m0/app/task_workspace_page.dart';
 import 'package:ustc_assistant_m0/core/agenda_contract.dart';
@@ -29,10 +30,12 @@ import 'package:ustc_assistant_m0/core/agent_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_context_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_conversation_contract.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
+import 'package:ustc_assistant_m0/core/contracts.dart';
 import 'package:ustc_assistant_m0/core/reminder_contract.dart';
 import 'package:ustc_assistant_m0/ios_i4_entry.dart';
 import 'package:ustc_assistant_m0/platform/agent_image_picker.dart';
 import 'package:ustc_assistant_m0/platform/ios_agent_image_picker.dart';
+import 'package:ustc_assistant_m0/platform/ios_runtime_platform_factory.dart';
 
 const _platform = MethodChannel('ustc_assistant/platform_v1');
 const _images = MethodChannel('ustc_assistant/images_v1');
@@ -131,6 +134,8 @@ void main() {
       final morning = _NoNetworkMorningGateway();
       RuntimeBootstrap? bootstrap;
       var openCount = 0;
+      var startupStage = 'entryMetadata';
+      String? startupFailure;
       final captureKey = GlobalKey();
       final ratio = tester.view.devicePixelRatio;
       tester.view.physicalSize = Size(393 * ratio, 852 * ratio);
@@ -145,21 +150,34 @@ void main() {
             child: IOSI4App(
               openBootstrap: (factory) async {
                 openCount++;
-                final opened = await HttpOverrides.runWithHttpOverrides(
-                  () => RuntimeBootstrap.open(
-                    platformFactory: factory,
-                    modelGateway: UstcModelGateway.loopbackForTesting(
-                      service.baseUri,
-                      connectTimeout: const Duration(seconds: 5),
-                      requestTimeout: const Duration(seconds: 35),
-                      idleTimeout: const Duration(seconds: 25),
+                startupStage = 'opening';
+                late final RuntimeBootstrap opened;
+                try {
+                  opened = await HttpOverrides.runWithHttpOverrides(
+                    () => RuntimeBootstrap.open(
+                      platformFactory: IOSRuntimePlatformFactory(
+                        onStartupStage: (stage) => startupStage = stage,
+                      ),
+                      modelGateway: UstcModelGateway.loopbackForTesting(
+                        service.baseUri,
+                        connectTimeout: const Duration(seconds: 5),
+                        requestTimeout: const Duration(seconds: 35),
+                        idleTimeout: const Duration(seconds: 25),
+                      ),
+                      morningGateway: morning,
+                      diagnosticApplicationVersion: '0.4.0',
                     ),
-                    morningGateway: morning,
-                    diagnosticApplicationVersion: '0.4.0',
-                  ),
-                  http,
-                ).timeout(_operationTimeout);
+                    http,
+                  ).timeout(_operationTimeout);
+                } on AppFailure catch (error) {
+                  startupFailure = error.code.name;
+                  rethrow;
+                } on Object {
+                  startupFailure = 'unexpected';
+                  rethrow;
+                }
                 bootstrap = opened;
+                startupStage = 'checkingFreshStore';
                 expect(opened.directory.isHeld, isTrue);
                 expect(opened.jwDirectory.isHeld, isTrue);
                 final runtime = opened.runtime!;
@@ -171,17 +189,32 @@ void main() {
                   isEmpty,
                 );
                 expect(runtime.agent.view.messages, isEmpty);
-                await _seedBusiness(runtime);
+                await _seedBusiness(
+                  runtime,
+                  onStage: (stage) => startupStage = stage,
+                );
+                startupStage = 'ready';
                 return opened;
               },
             ),
           ),
         );
-        await _pumpUntil(
-          tester,
-          () => find.byType(AgentWorkspacePage).evaluate().isNotEmpty,
-          reason: 'validated I4 entry must open the actual product Agent',
-        );
+        try {
+          await _pumpUntil(
+            tester,
+            () =>
+                find.byType(AgentWorkspacePage).evaluate().isNotEmpty ||
+                find.byType(M0StartupFailureApp).evaluate().isNotEmpty,
+            reason: 'validated I4 entry must open the actual product Agent',
+          );
+          expect(find.byType(AgentWorkspacePage), findsOneWidget);
+        } on Object {
+          final failures = find.byType(M0StartupFailureApp);
+          debugPrint(
+            'I4 startup failure facts: ${jsonEncode({'stage': startupStage, 'failure': startupFailure, 'entryFailure': failures.evaluate().isEmpty ? null : tester.widget<M0StartupFailureApp>(failures).code.name, 'openCount': openCount, 'bootstrapOpened': bootstrap != null, 'nativeHost': await _platform.invokeMethod<String>('i4HostFixtureInspect')})}',
+          );
+          rethrow;
+        }
         final opened = bootstrap!;
         final runtime = opened.runtime!;
         expect(openCount, 1);
@@ -862,7 +895,11 @@ Future<void> _configureFromProduct(
   );
 }
 
-Future<void> _seedBusiness(DemoRuntime runtime) async {
+Future<void> _seedBusiness(
+  DemoRuntime runtime, {
+  required void Function(String) onStage,
+}) async {
+  onStage('seedEvent');
   final local = runtime.jwStore.localCalendar;
   final day = beijingDay(runtime.clock.nowUtc).add(const Duration(days: 1));
   // Exact seconds match the native millisecond wire and keep the calendar
@@ -893,6 +930,7 @@ Future<void> _seedBusiness(DemoRuntime runtime) async {
     ),
   );
   final tasks = await local.queryTasks(const TaskQuery());
+  onStage('seedTask');
   await local.commit(
     await local.prepare(
       tasks.context,
@@ -904,14 +942,17 @@ Future<void> _seedBusiness(DemoRuntime runtime) async {
       ),
     ),
   );
+  onStage('nativeNotificationPermission');
   await _notifications
       .invokeMethod<void>('i3Fixture', {'action': 'provisional'})
       .timeout(_operationTimeout);
+  onStage('seedReminderPreferences');
   final reminders = await runtime.jwStore.features.inspectReminders();
   await runtime.jwStore.features.saveReminderPreferences(
     reminders,
     reminders.preferences.copyWith(enabled: true, morningEnabled: false),
   );
+  onStage('nativeReminderRefresh');
   await runtime.reminders.refresh().timeout(_operationTimeout);
 }
 
