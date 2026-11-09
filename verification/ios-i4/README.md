@@ -32,10 +32,18 @@ audio, model, private-key, provisioning-profile, ATS override, background-mode,
 remote-notification, and known I2/I3/I4 fixture or loopback-test markers. It
 rejects common persistent-data asset formats (`.db`, `.sqlite`, `.sqlite3`,
 WAL/SHM sidecars, `.jsonl`, `.ics`, `.csv`, and `.tsv`). It also requires the
-native image channel and `pickImages` strings, the existing notification and
-system-document export markers, the I4 `photosui-imageio-v1` declaration, and
+native image and host channels, the linked image bridge/policy and PhotosUI type
+strings, the image channel and `pickImages` dispatch strings in Dart AOT, the
+existing notification and system-document export markers, the I4
+`photosui-imageio-v1` declaration, and
 two stable Agent UI `ValueKey` strings in the Dart AOT (`agent-composer` and
 `agent-current-approval-open`).
+
+Swift Release may materialize short strings as instruction constants, as seen
+for `pickImages` in the actual I4 device binary. The native audit uses the
+long type/channel markers; it requires the short method name at the Dart call
+site instead. This avoids relying on a contiguous native string as a Swift ABI
+guarantee. Missing native types/channels or Dart dispatch still fail the audit.
 
 These path and format gates do not prove that arbitrary text or other files
 contain no private content. The candidate build is assembled from the
