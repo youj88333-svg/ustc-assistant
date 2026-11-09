@@ -181,6 +181,7 @@ public final class IOSAgentImageBridge: NSObject, PHPickerViewControllerDelegate
       flight.resultCallbackHandled = true
       flight.afterDismissal.append { [weak self, weak flight] in
         guard let self, let flight else { return }
+        guard !flight.isRevoked else { self.finishCancelled(flight); return }
         self.finish(flight, result: .success([]))
       }
     }
@@ -390,13 +391,23 @@ public final class IOSAgentImageBridge: NSObject, PHPickerViewControllerDelegate
       if case .success(let images) = result { images.forEach(Self.wipe) }
       return
     }
+    let resolved: IOSAgentImageResult
+    if active.isRevoked {
+      if case .success(let images) = result { images.forEach(Self.wipe) }
+      guard active.dismissalFinished, !active.isProcessing else { return }
+      // Revocation wins over every late success/error path, including a
+      // user-started interactive dismissal that finishes during shutdown.
+      resolved = .failure("cancelled")
+    } else {
+      resolved = result
+    }
     active.pickReplyCompleted = true
     flight = nil
     Self.processHasFlight = false
     active.progress?.cancel()
     active.progress = nil
     active.providers.removeAll()
-    switch result {
+    switch resolved {
     case .success(let images):
       // Give the codec independent byte storage before wiping our mutable
       // normalization buffers. OS/codec copies are outside this ownership.

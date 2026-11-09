@@ -112,7 +112,16 @@ enum IOSAgentImagePolicy {
     }
     // Do not copy source property dictionaries: that would retain EXIF/GPS,
     // timestamps, camera identifiers, and other source metadata.
-    CGImageDestinationAddImage(destination, thumbnail, nil)
+    let strippedProperties: [CFString: Any] = [
+      kCGImagePropertyExifDictionary: NSNull(),
+      kCGImagePropertyExifAuxDictionary: NSNull(),
+      kCGImagePropertyGPSDictionary: NSNull(),
+      kCGImagePropertyTIFFDictionary: NSNull(),
+      kCGImagePropertyIPTCDictionary: NSNull(),
+      kCGImageMetadataShouldExcludeGPS: true,
+      kCGImageMetadataShouldExcludeXMP: true,
+    ]
+    CGImageDestinationAddImage(destination, thumbnail, strippedProperties as CFDictionary)
     guard CGImageDestinationFinalize(destination) else {
       encoded.resetBytes(in: NSRange(location: 0, length: encoded.length))
       throw IOSAgentImagePolicyFailure.imageRejected

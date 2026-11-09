@@ -37,8 +37,8 @@ I4_DEBUG_MARKERS = (
     b"i4HostFixture",
     b"i4ImageFixture",
     b"i4-image-fixture",
-    b"i4-synthetic-model-fixture",
-    b"IOSI4LoopbackProbe",
+    b"i4-synthetic-loopback-key",
+    b"I4_TRANSIENT_REASONING_ONLY",
 )
 I3_NOTIFICATION_WIRING_MARKERS = (
     b"ustc_assistant/ios_notifications_v1",

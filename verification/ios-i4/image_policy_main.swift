@@ -115,9 +115,11 @@ private struct IOSAgentImagePolicyMain {
       defer { try? handle.close() }
       try handle.seekToEnd()
       try handle.write(contentsOf: padding)
+      // URL.resourceValues cached the pre-append file size above. Verify the
+      // live descriptor instead of reusing that stale URL resource cache.
+      let exactSize = try handle.seekToEnd()
       try handle.close()
-      let exactSize = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize
-      guard exactSize == IOSAgentImagePolicy.maximumOriginalBytes else { return false }
+      guard exactSize == UInt64(IOSAgentImagePolicy.maximumOriginalBytes) else { return false }
       let output = try IOSAgentImagePolicy.normalize(fileAt: source)
       details["ten_mib_source_limit_inclusive"] = outputSummary(output)
       return hasSize(output, width: 8, height: 6)
@@ -340,7 +342,21 @@ private struct IOSAgentImagePolicyMain {
       "gps": properties[kCGImagePropertyGPSDictionary] != nil,
       "tiff": properties[kCGImagePropertyTIFFDictionary] != nil,
       "orientation": (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 0,
+      "chunks": pngChunks(data),
     ]
+  }
+
+  private static func pngChunks(_ data: Data) -> [String] {
+    guard isPNG(data) else { return ["non_png"] }
+    var offset = 8
+    var chunks: [String] = []
+    while offset <= data.count - 12 && chunks.count < 32 {
+      let size = (0..<4).reduce(0) { ($0 << 8) | Int(data[offset + $1]) }
+      guard size <= data.count - offset - 12 else { return ["invalid"] }
+      chunks.append(String(bytes: data[(offset + 4)..<(offset + 8)], encoding: .ascii) ?? "invalid")
+      offset += size + 12
+    }
+    return offset == data.count ? chunks : ["invalid"]
   }
 
   private static func hasSize(_ data: Data, width: Int, height: Int) -> Bool {
