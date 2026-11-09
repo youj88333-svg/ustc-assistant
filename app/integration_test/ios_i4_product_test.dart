@@ -86,11 +86,11 @@ Future<void> checkIOSI4LoopbackDirectoryForTesting() async {
       ),
       http,
     ).timeout(const Duration(seconds: 10));
-    expect(models, [_model]);
-    expect(service.modelRequests, 1);
-    expect(service.failures, isEmpty);
-    expect(http.socketCreations, 1);
-    expect(http.deniedConnections, 0);
+    expectSync(models, [_model]);
+    expectSync(service.modelRequests, 1);
+    expectSync(service.failures, isEmpty);
+    expectSync(http.socketCreations, 1);
+    expectSync(http.deniedConnections, 0);
   } on Object {
     debugPrint(
       'I4 fixture failure facts: ${jsonEncode({'serverFailureTypes': service.failures, 'serverFailureStage': service.failureStage, 'serverAuthorizationMatches': service.authorizationMatches, 'serverModelsRoute': service.modelsRoute, 'directoryRequests': service.modelRequests, 'socketCreations': http.socketCreations, 'deniedConnections': http.deniedConnections})}',
@@ -185,17 +185,17 @@ void main() {
                 }
                 bootstrap = opened;
                 startupStage = 'checkingFreshStore';
-                expect(opened.directory.isHeld, isTrue);
-                expect(opened.jwDirectory.isHeld, isTrue);
+                expectSync(opened.directory.isHeld, isTrue);
+                expectSync(opened.jwDirectory.isHeld, isTrue);
                 final runtime = opened.runtime!;
-                expect(runtime.agent.view.settings!.keySaved, isFalse);
-                expect(
+                expectSync(runtime.agent.view.settings!.keySaved, isFalse);
+                expectSync(
                   (await runtime.jwStore.localCalendar.queryTasks(
                     const TaskQuery(filter: TaskFilter.all),
                   )).items,
                   isEmpty,
                 );
-                expect(runtime.agent.view.messages, isEmpty);
+                expectSync(runtime.agent.view.messages, isEmpty);
                 await _seedBusiness(
                   runtime,
                   onStage: (stage) => startupStage = stage,
@@ -332,9 +332,9 @@ void main() {
         });
         service.enqueue((response, body) async {
           final result = _lastToolResult(body, 'i4.agenda');
-          expect(result['status'], 'success');
+          expectSync(result['status'], 'success');
           final rows = (result['data'] as Map)['items'] as List;
-          expect(
+          expectSync(
             rows.map((row) => (row as Map)['title']),
             contains(_eventTitle),
           );
@@ -342,12 +342,12 @@ void main() {
         });
         service.enqueue((response, body) async {
           final result = _lastToolResult(body, 'i4.tasks');
-          expect(result['status'], 'success');
+          expectSync(result['status'], 'success');
           final rows = (result['data'] as Map)['items'] as List;
-          expect(rows, hasLength(1));
-          expect((rows.single as Map)['title'], _seedTaskTitle);
-          expect((rows.single as Map).containsKey('description'), isFalse);
-          expect((rows.single as Map).containsKey('note'), isFalse);
+          expectSync(rows, hasLength(1));
+          expectSync((rows.single as Map)['title'], _seedTaskTitle);
+          expectSync((rows.single as Map).containsKey('description'), isFalse);
+          expectSync((rows.single as Map).containsKey('note'), isFalse);
           await _writeText(response, '已读取本机合成日程和任务。');
         });
         await _sendFromProduct(tester, '查询我的本地日程和任务列表');
@@ -391,7 +391,7 @@ void main() {
           _createTask('I4 拒绝任务'),
         );
         service.enqueue((response, body) async {
-          expect(_lastToolResult(body, 'i4.reject')['status'], 'rejected');
+          expectSync(_lastToolResult(body, 'i4.reject')['status'], 'rejected');
           await _writeText(response, '已拒绝合成方案。');
         });
         await _sendFromProduct(tester, '创建一个标题为 I4 拒绝任务的本地任务，交给我确认');
@@ -416,8 +416,8 @@ void main() {
         );
         service.enqueue((response, body) async {
           final result = _lastToolResult(body, 'i4.approve');
-          expect(result['status'], 'committed');
-          expect((result['data'] as Map)['count'], 1);
+          expectSync(result['status'], 'committed');
+          expectSync((result['data'] as Map)['count'], 1);
           await _writeText(response, '已按本次确认保存合成任务。');
         });
         await _sendFromProduct(
@@ -484,7 +484,7 @@ void main() {
         service.enqueue((response, body) async {
           final result = _lastToolResult(body, 'i4.version.read');
           final rows = (result['data'] as Map)['items'] as List;
-          expect(rows, hasLength(1));
+          expectSync(rows, hasLength(1));
           await _writeTool(
             response,
             'i4.version.write',
@@ -502,7 +502,7 @@ void main() {
         });
         service.enqueue((response, body) async {
           final result = _lastToolResult(body, 'i4.version.write');
-          expect(result['status'], 'stale');
+          expectSync(result['status'], 'stale');
           await _writeText(response, '目标已变化，旧方案没有覆盖本地修改。');
         });
         await _sendFromProduct(tester, '把 $_seedTaskTitle 改名为 I4 过期覆盖，先让我确认');
@@ -641,8 +641,8 @@ void main() {
         // intentionally does not pretend to be a user's native Photos choice.
         final syntheticImage = (await tester.runAsync(_makeImage))!;
         service.enqueue((response, body) async {
-          expect(_imageParts(body), hasLength(1));
-          expect(
+          expectSync(_imageParts(body), hasLength(1));
+          expectSync(
             (_messages(body).last['content'] as List).whereType<Map>().where(
               (part) => part['type'] == 'image_url',
             ),
@@ -650,7 +650,7 @@ void main() {
           );
           final url =
               ((_imageParts(body).single['image_url'] as Map)['url'] as String);
-          expect(
+          expectSync(
             url,
             'data:image/png;base64,${base64Encode(syntheticImage.bytes)}',
           );
@@ -670,8 +670,8 @@ void main() {
           1,
         );
         service.enqueue((response, body) async {
-          expect(_imageParts(body), isEmpty);
-          expect(jsonEncode(body), isNot(contains(_reasoning)));
+          expectSync(_imageParts(body), isEmpty);
+          expectSync(jsonEncode(body), isNot(contains(_reasoning)));
           await _writeText(response, '后续轮次没有重发原图。');
         });
         await _sendFromProduct(tester, '继续本地合成对话，不附图');
@@ -683,13 +683,13 @@ void main() {
             .map((m) => m.id)
             .toList();
         service.enqueue((response, body) async {
-          expect((body['tools'] as List? ?? const []), isEmpty);
-          expect(
+          expectSync((body['tools'] as List? ?? const []), isEmpty);
+          expectSync(
             (_messages(body).first['content'] as String),
             contains('TASK CONTEXT_SUMMARY'),
           );
-          expect(_imageParts(body), isEmpty);
-          expect(jsonEncode(body), isNot(contains(_reasoning)));
+          expectSync(_imageParts(body), isEmpty);
+          expectSync(jsonEncode(body), isNot(contains(_reasoning)));
           await _writeText(response, '合成历史：一项任务已确认保存；拒绝、停止和撤销均未新增任务。');
         }, summary: true);
         await _sendFromProduct(tester, '/compact');
@@ -937,7 +937,7 @@ Future<void> _seedBusiness(
       endDayExclusive: day.add(const Duration(days: 1)),
     ),
   );
-  expect(
+  expectSync(
     window.items,
     isEmpty,
     reason: 'I4 requires a fresh synthetic Simulator installation',
@@ -1413,11 +1413,11 @@ List<Map> _imageParts(Map<String, dynamic> body) => [
 Map<String, dynamic> _lastToolResult(Map<String, dynamic> body, String id) {
   final messages = _messages(body);
   final tool = messages.last;
-  expect(tool['role'], 'tool');
-  expect(tool['tool_call_id'], id);
+  expectSync(tool['role'], 'tool');
+  expectSync(tool['tool_call_id'], id);
   final assistant = messages.lastWhere((m) => m['role'] == 'assistant');
   final calls = assistant['tool_calls'] as List;
-  expect(calls.map((call) => (call as Map)['id']), contains(id));
+  expectSync(calls.map((call) => (call as Map)['id']), contains(id));
   return jsonDecode(tool['content'] as String) as Map<String, dynamic>;
 }
 
@@ -1425,6 +1425,9 @@ typedef _Reply =
     Future<void> Function(HttpResponse response, Map<String, dynamic> body);
 
 final class _LoopbackService {
+  // Socket callbacks can run while WidgetTester.pump owns an async guard.
+  // expectSync keeps every matcher without treating those callbacks as an
+  // overlapping WidgetTester operation. Ordinary UI assertions use expect.
   HttpServer? _server;
   StreamSubscription<HttpRequest>? _subscription;
   final bodies = <Map<String, dynamic>>[];
@@ -1476,7 +1479,7 @@ final class _LoopbackService {
           request.headers.value(HttpHeaders.authorizationHeader) ==
           'Bearer $_key';
       modelsRoute = request.method == 'GET' && request.uri.path == '/v1/models';
-      expect(
+      expectSync(
         request.headers.value(HttpHeaders.authorizationHeader),
         'Bearer $_key',
       );
@@ -1495,8 +1498,8 @@ final class _LoopbackService {
         return;
       }
       stage = 'chatRoute';
-      expect(request.method, 'POST');
-      expect(request.uri.path, '/v1/chat/completions');
+      expectSync(request.method, 'POST');
+      expectSync(request.uri.path, '/v1/chat/completions');
       stage = 'chatBody';
       final body =
           jsonDecode(
@@ -1508,8 +1511,8 @@ final class _LoopbackService {
               as Map<String, dynamic>;
       bodies.add(body);
       stage = 'chatProtocol';
-      expect(body['model'], _model);
-      expect(body['stream'], isTrue);
+      expectSync(body['model'], _model);
+      expectSync(body['stream'], isTrue);
       final system = _messages(body).first['content'] as String;
       if (system.contains('TASK CAPABILITY_PROBE')) {
         await _writeText(request.response, 'USTC_TEXT_PROBE');
@@ -1525,13 +1528,13 @@ final class _LoopbackService {
       }
       if (choice == 'none' && system.contains('TASK TOOL_CAPABILITY_PROBE')) {
         final result = _lastToolResult(body, 'i4:probe');
-        expect(result['value'], 'ustc_probe');
+        expectSync(result['value'], 'ustc_probe');
         probeProof = result['proof'] as String;
         probeResultBody = body;
         await _writeText(request.response, probeProof!);
         return;
       }
-      expect(
+      expectSync(
         _replies,
         isNotEmpty,
         reason: 'every model request needs an explicit synthetic script',
@@ -1540,12 +1543,12 @@ final class _LoopbackService {
       stage = 'toolSet';
       if (!script.summary) {
         final tools = body['tools'] as List;
-        expect(tools, hasLength(20));
-        expect(
+        expectSync(tools, hasLength(20));
+        expectSync(
           tools.map((t) => ((t as Map)['function'] as Map)['name']).toSet(),
           _fixedTools,
         );
-        expect(body.containsKey('tool_choice'), isFalse);
+        expectSync(body.containsKey('tool_choice'), isFalse);
       }
       stage = 'script';
       await script.reply(request.response, body);
