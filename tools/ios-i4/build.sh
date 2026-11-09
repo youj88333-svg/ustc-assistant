@@ -14,13 +14,13 @@ exec > >(tee "$output/i4-build.log") 2>&1
 swiftc app/ios/Runner/IOSAgentImagePolicy.swift verification/ios-i4/image_policy_main.swift -o "$TMPDIR/i4-image-policy-test"
 "$TMPDIR/i4-image-policy-test" | tee "$output/i4-image-policy.log"
 python3 tools/ios-i4/test_verify_package.py
-bash tools/ios-i3/build.sh
-for name in i2-build.log i2-xcode.txt i2-auth-compatibility-test.log i2-confirm-light.png i2-alert-dark.png i2-simulator-test.log i2-boundaries-test.log i2-persistence-write.log i2-persistence-read.log ios-i2-verification.json ios-i2-pubspec.lock i3-build.log i3-notifications-test.log i3-shared-jobs-test.log i3-workspace-test.log i3-workspace.png i3-workspace-large-text.png i3-reminders.png ios-i3-verification.json; do
-  cp "$repo/app/build/ios-i3/artifacts/$name" "$output/$name"
-done
-export TMPDIR="$repo/app/build/ios-i4/temp/"
+# Fail on the new native/product boundary before spending minutes on all
+# prerequisite device builds. The unchanged I1-I3 gates still run below on
+# this exact revision before an I4 device candidate can be produced.
 ruby tools/ios-i4/configure.rb "$revision" debug
 cd "$repo/app"
+cp "$repo/tools/ios-i1/pubspec.lock" pubspec.lock
+flutter pub get --enforce-lockfile
 flutter analyze --no-pub 2>&1 | tee "$output/i4-analyze.log"
 flutter test --no-pub test/platform/ios_i4_product_surface_test.dart test/platform/ios_i4_entry_test.dart test/platform/ios_agent_image_picker_test.dart test/platform/agent_image_picker_test.dart test/agent/gateway_coordinator_contract_test.dart test/agent/model_provider_gateway_test.dart test/agent/agent_reminder_tools_test.dart test/agent/agent_compact_command_test.dart test/app/agent_approval_visibility_test.dart test/app/agent_reasoning_panel_test.dart 2>&1 | tee "$output/i4-shared-test.log"
 xcrun simctl list runtimes -j > "$TMPDIR/runtimes.json"
@@ -42,6 +42,11 @@ xcrun simctl delete "$simulator"
 trap - EXIT
 
 cd "$repo"
+bash tools/ios-i3/build.sh
+for name in i2-build.log i2-xcode.txt i2-auth-compatibility-test.log i2-confirm-light.png i2-alert-dark.png i2-simulator-test.log i2-boundaries-test.log i2-persistence-write.log i2-persistence-read.log ios-i2-verification.json ios-i2-pubspec.lock i3-build.log i3-notifications-test.log i3-shared-jobs-test.log i3-workspace-test.log i3-workspace.png i3-workspace-large-text.png i3-reminders.png ios-i3-verification.json; do
+  cp "$repo/app/build/ios-i3/artifacts/$name" "$output/$name"
+done
+export TMPDIR="$repo/app/build/ios-i4/temp/"
 ruby tools/ios-i4/configure.rb "$revision" release
 cd "$repo/app"
 base_number="${PROJECT_BUILD_NUMBER:-${BUILD_NUMBER:-1}}"
