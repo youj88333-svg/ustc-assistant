@@ -22,7 +22,7 @@ cd "$repo/app"
 cp "$repo/tools/ios-i1/pubspec.lock" pubspec.lock
 flutter pub get --enforce-lockfile
 flutter analyze --no-pub 2>&1 | tee "$output/i4-analyze.log"
-flutter test --no-pub test/platform/ios_i4_product_surface_test.dart test/platform/ios_i4_entry_test.dart test/platform/ios_agent_image_picker_test.dart test/platform/agent_image_picker_test.dart test/agent/gateway_coordinator_contract_test.dart test/agent/model_provider_gateway_test.dart test/agent/agent_reminder_tools_test.dart test/agent/agent_compact_command_test.dart test/app/agent_approval_visibility_test.dart test/app/agent_reasoning_panel_test.dart 2>&1 | tee "$output/i4-shared-test.log"
+flutter test --no-pub test/platform/ios_i4_fixture_http_test.dart test/platform/ios_i4_product_surface_test.dart test/platform/ios_i4_entry_test.dart test/platform/ios_agent_image_picker_test.dart test/platform/agent_image_picker_test.dart test/agent/gateway_coordinator_contract_test.dart test/agent/model_provider_gateway_test.dart test/agent/agent_reminder_tools_test.dart test/agent/agent_compact_command_test.dart test/app/agent_approval_visibility_test.dart test/app/agent_reasoning_panel_test.dart 2>&1 | tee "$output/i4-shared-test.log"
 xcrun simctl list runtimes -j > "$TMPDIR/runtimes.json"
 xcrun simctl list devicetypes -j > "$TMPDIR/device-types.json"
 read -r runtime device_type < <(python3 "$repo/tools/ios-i1/select_simulator.py" --runtimes "$TMPDIR/runtimes.json" --device-types "$TMPDIR/device-types.json")

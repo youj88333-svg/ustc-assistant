@@ -68,6 +68,32 @@ const _fixedTools = {
   'query_reminders',
 };
 
+/// Independently check the native journey's actual HTTP fixture on the host.
+/// This does not exercise UIKit, credentials, or the product activity gate.
+@visibleForTesting
+Future<void> checkIOSI4LoopbackDirectoryForTesting() async {
+  final service = _LoopbackService();
+  await service.start();
+  final http = _LoopbackOnlyHttpOverrides(service.baseUri);
+  final gateway = UstcModelGateway.loopbackForTesting(service.baseUri);
+  try {
+    final models = await HttpOverrides.runWithHttpOverrides(
+      () => gateway.listModels(
+        ModelSecretLease(Uint8List.fromList(utf8.encode(_key))),
+      ),
+      http,
+    ).timeout(const Duration(seconds: 10));
+    expect(models, [_model]);
+    expect(service.modelRequests, 1);
+    expect(service.failures, isEmpty);
+    expect(http.socketCreations, 1);
+    expect(http.deniedConnections, 0);
+  } finally {
+    await gateway.close();
+    await service.close();
+  }
+}
+
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   testWidgets(
