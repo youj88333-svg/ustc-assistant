@@ -39,6 +39,7 @@ INFO_PATH = verifier._I1.APP_INFO_PATH
 I3_MANIFEST_PATH = verifier._I1.I3_MANIFEST_PATH
 MANIFEST_PATH = verifier._I1.I4_MANIFEST_PATH
 AGENT_PRODUCT_SURFACE_MARKERS = verifier._I1.I4_AGENT_PRODUCT_SURFACE_MARKERS
+AGENT_IMAGE_DISPATCH_MARKERS = verifier._I1.I4_AGENT_IMAGE_DISPATCH_MARKERS
 
 WIRING_MARKERS = (
     verifier._I1.I3_NOTIFICATION_WIRING_MARKERS
@@ -100,7 +101,7 @@ def fixture_members(
             b"aot:"
             + REVISION.encode("ascii")
             + b"|"
-            + b"\n".join(AGENT_PRODUCT_SURFACE_MARKERS)
+            + b"\n".join(AGENT_PRODUCT_SURFACE_MARKERS + AGENT_IMAGE_DISPATCH_MARKERS)
         )
     base_members = i3_fixtures.fixture_members(
         i1_revision=i1_revision,
@@ -180,6 +181,7 @@ class VerifyI4PackageTests(unittest.TestCase):
                 "notificationNativeWiringStringsPresent",
                 "diagnosticExportNativeWiringStringsPresent",
                 "agentImageNativeWiringStringsPresent",
+                "agentImageDartDispatchStringsPresent",
                 "agentProductSurfaceStringsPresent",
                 "noI2I3I4FixtureAndLoopbackMarkersInRunnerOrAOT",
                 "noBundledPersistentDataAssetFormats",
@@ -277,6 +279,31 @@ class VerifyI4PackageTests(unittest.TestCase):
                 ipa = self.ipa(app_framework_payload=payload)
                 self.assert_reason(
                     "agent_product_surface_missing",
+                    lambda: verifier.verify_package(ipa, REVISION),
+                )
+
+    def test_optimized_native_methods_still_require_linked_types_and_dart_dispatch(self) -> None:
+        # Real Swift Release emits the short pickImages method as immediate
+        # SmallString instructions. A contiguous native literal is not an ABI.
+        self.assertNotIn(b"pickImages", RUNNER_NATIVE_PAYLOAD)
+        verifier.verify_package(self.ipa(), REVISION)
+        for omitted in verifier._I1.I4_AGENT_IMAGE_WIRING_MARKERS:
+            with self.subTest(native=omitted):
+                retained = b"\n".join(m for m in WIRING_MARKERS if m != omitted)
+                ipa = self.ipa(runner_payload=retained)
+                self.assert_reason(
+                    "agent_image_native_wiring_missing",
+                    lambda: verifier.verify_package(ipa, REVISION),
+                )
+        for omitted in AGENT_IMAGE_DISPATCH_MARKERS:
+            with self.subTest(dispatch=omitted):
+                retained = b"\n".join(
+                    m for m in AGENT_PRODUCT_SURFACE_MARKERS + AGENT_IMAGE_DISPATCH_MARKERS
+                    if m != omitted
+                )
+                ipa = self.ipa(app_framework_payload=b"aot:" + REVISION.encode() + b"|" + retained)
+                self.assert_reason(
+                    "agent_image_dart_dispatch_missing",
                     lambda: verifier.verify_package(ipa, REVISION),
                 )
 

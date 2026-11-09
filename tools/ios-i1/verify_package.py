@@ -52,8 +52,17 @@ I3_DIAGNOSTIC_EXPORT_WIRING_MARKERS = (
 )
 I4_AGENT_IMAGE_WIRING_MARKERS = (
     b"ustc_assistant/images_v1",
-    b"pickImages",
+    # Swift Release can materialize short method names as SmallString
+    # instruction constants. Require the linked bridge/policy and PhotosUI
+    # types here; check the actual method name in the Dart dispatch below.
+    b"IOSAgentImageBridge",
+    b"IOSAgentImagePolicy",
+    b"PHPickerViewController",
     b"ustc_assistant/ios_host_lifecycle_v1",
+)
+I4_AGENT_IMAGE_DISPATCH_MARKERS = (
+    b"ustc_assistant/images_v1",
+    b"pickImages",
 )
 I4_AGENT_PRODUCT_SURFACE_MARKERS = (
     b"agent-composer",
@@ -894,6 +903,8 @@ def _validate_all_contents(
             _fail("diagnostic_export_native_wiring_missing")
         if not _contains_all_binary_markers(zf, runner_info, I4_AGENT_IMAGE_WIRING_MARKERS):
             _fail("agent_image_native_wiring_missing")
+        if not _contains_all_binary_markers(zf, app_aot_info, I4_AGENT_IMAGE_DISPATCH_MARKERS):
+            _fail("agent_image_dart_dispatch_missing")
 
     framework_binaries = _validate_frameworks(zf, members, expected_revision)
     if APP_FRAMEWORK_EXECUTABLE not in framework_binaries:
@@ -1000,6 +1011,7 @@ def verify_package(
         checks["notificationNativeWiringStringsPresent"] = True
         checks["diagnosticExportNativeWiringStringsPresent"] = True
         checks["agentImageNativeWiringStringsPresent"] = True
+        checks["agentImageDartDispatchStringsPresent"] = True
         checks["agentProductSurfaceStringsPresent"] = True
         checks["noI2I3I4FixtureAndLoopbackMarkersInRunnerOrAOT"] = True
         checks["noBundledPersistentDataAssetFormats"] = True
