@@ -179,12 +179,9 @@ final class _OwnedAppState extends State<OwnedApplication> {
       // Flutter may be hidden by a controlled native window. Actual UIKit
       // activity drives model/approval revocation; surface state only gates
       // automatic background work.
+      _syncAutomaticForeground();
       if (state == AppLifecycleState.resumed && _iosHostActive) {
-        _syncAutomaticForeground();
         runtime.reminders.onForeground();
-      } else {
-        runtime.morning.onForeground(false);
-        runtime.youngDaily.onForeground(false);
       }
       return;
     }
@@ -233,12 +230,18 @@ final class _OwnedAppState extends State<OwnedApplication> {
     final runtime = _boundRuntime;
     if (runtime == null) return;
     final state = WidgetsBinding.instance.lifecycleState;
-    final allowed =
+    final hostAllowed =
         (!widget.enableOnboarding || _onboarding?.blocksAutomatic == false) &&
-        (defaultTargetPlatform != TargetPlatform.iOS || _iosHostActive) &&
-        (state == null || state == AppLifecycleState.resumed);
+        (defaultTargetPlatform != TargetPlatform.iOS || _iosHostActive);
+    final allowed =
+        hostAllowed && (state == null || state == AppLifecycleState.resumed);
     runtime.morning.onForeground(allowed);
-    runtime.youngDaily.onForeground(allowed);
+    // iOS daily checks require a manual school window. Hiding Flutter behind
+    // that window must not cancel its in-progress manual grant. Real UIKit
+    // inactivity still withdraws it through _onIOSHostActivity.
+    runtime.youngDaily.onForeground(
+      defaultTargetPlatform == TargetPlatform.iOS ? hostAllowed : allowed,
+    );
   }
 
   void _setAgentHostAvailable(DemoRuntime runtime, bool available) {
