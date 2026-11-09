@@ -91,6 +91,11 @@ Future<void> checkIOSI4LoopbackDirectoryForTesting() async {
     expect(service.failures, isEmpty);
     expect(http.socketCreations, 1);
     expect(http.deniedConnections, 0);
+  } on Object {
+    debugPrint(
+      'I4 fixture failure facts: ${jsonEncode({'serverFailureTypes': service.failures, 'serverFailureStage': service.failureStage, 'serverAuthorizationMatches': service.authorizationMatches, 'serverModelsRoute': service.modelsRoute, 'directoryRequests': service.modelRequests, 'socketCreations': http.socketCreations, 'deniedConnections': http.deniedConnections})}',
+    );
+    rethrow;
   } finally {
     await gateway.close();
     await service.close();
@@ -128,6 +133,8 @@ void main() {
       expect(metadata?['authentication'], 'manual');
       expect(metadata?['notificationBackend'], 'user-notifications-v1');
       expect(metadata?['imagePicker'], 'photosui-imageio-v1');
+      await checkIOSI4LoopbackDirectoryForTesting();
+      debugPrint('I4 native loopback fixture: real gateway directory accepted');
 
       final previousHttpOverrides = HttpOverrides.current;
       final service = _LoopbackService();
@@ -210,9 +217,24 @@ void main() {
           expect(find.byType(AgentWorkspacePage), findsOneWidget);
         } on Object {
           final failures = find.byType(M0StartupFailureApp);
-          debugPrint(
-            'I4 startup failure facts: ${jsonEncode({'stage': startupStage, 'failure': startupFailure, 'entryFailure': failures.evaluate().isEmpty ? null : tester.widget<M0StartupFailureApp>(failures).code.name, 'openCount': openCount, 'bootstrapOpened': bootstrap != null, 'nativeHost': await _platform.invokeMethod<String>('i4HostFixtureInspect')})}',
-          );
+          final facts = {
+            'stage': startupStage,
+            'failure': startupFailure,
+            'entryFailure': failures.evaluate().isEmpty
+                ? null
+                : tester.widget<M0StartupFailureApp>(failures).code.name,
+            'openCount': openCount,
+            'bootstrapOpened': bootstrap != null,
+            'runtimePresent': bootstrap?.runtime != null,
+            'maintenancePhase':
+                bootstrap?.settings.settingsView.maintenance.phase.name,
+            'maintenanceFailure':
+                bootstrap?.settings.settingsView.maintenance.failure?.name,
+            'nativeHost': await _platform.invokeMethod<String>(
+              'i4HostFixtureInspect',
+            ),
+          };
+          debugPrint('I4 startup failure facts: ${jsonEncode(facts)}');
           rethrow;
         }
         final opened = bootstrap!;
@@ -862,6 +884,10 @@ Future<void> _configureFromProduct(
         'directoryRequests': service.modelRequests,
         'bodyRequests': service.bodies.length,
         'serverFailureCount': service.failures.length,
+        'serverFailureTypes': service.failures.toList(),
+        'serverFailureStage': service.failureStage,
+        'serverAuthorizationMatches': service.authorizationMatches,
+        'serverModelsRoute': service.modelsRoute,
         'clientCreations': http.clientCreations,
         'socketCreations': http.socketCreations,
         'deniedConnections': http.deniedConnections,
@@ -1407,6 +1433,9 @@ final class _LoopbackService {
   final _holds = <_HeldReply>[];
   final _handlers = <Future<void>>{};
   var modelRequests = 0;
+  String? failureStage;
+  bool? authorizationMatches;
+  bool? modelsRoute;
   String? probeProof;
   Map<String, dynamic>? probeResultBody;
 
@@ -1441,12 +1470,18 @@ final class _LoopbackService {
   }
 
   Future<void> _handle(HttpRequest request) async {
+    var stage = 'authorization';
     try {
+      authorizationMatches =
+          request.headers.value(HttpHeaders.authorizationHeader) ==
+          'Bearer $_key';
+      modelsRoute = request.method == 'GET' && request.uri.path == '/v1/models';
       expect(
         request.headers.value(HttpHeaders.authorizationHeader),
         'Bearer $_key',
       );
       if (request.method == 'GET' && request.uri.path == '/v1/models') {
+        stage = 'directoryResponse';
         modelRequests++;
         request.response.headers.contentType = ContentType.json;
         request.response.write(
@@ -1459,8 +1494,10 @@ final class _LoopbackService {
         await request.response.close();
         return;
       }
+      stage = 'chatRoute';
       expect(request.method, 'POST');
       expect(request.uri.path, '/v1/chat/completions');
+      stage = 'chatBody';
       final body =
           jsonDecode(
                 await utf8.decoder
@@ -1470,6 +1507,7 @@ final class _LoopbackService {
               )
               as Map<String, dynamic>;
       bodies.add(body);
+      stage = 'chatProtocol';
       expect(body['model'], _model);
       expect(body['stream'], isTrue);
       final system = _messages(body).first['content'] as String;
@@ -1499,6 +1537,7 @@ final class _LoopbackService {
         reason: 'every model request needs an explicit synthetic script',
       );
       final script = _replies.removeFirst();
+      stage = 'toolSet';
       if (!script.summary) {
         final tools = body['tools'] as List;
         expect(tools, hasLength(20));
@@ -1508,11 +1547,13 @@ final class _LoopbackService {
         );
         expect(body.containsKey('tool_choice'), isFalse);
       }
+      stage = 'script';
       await script.reply(request.response, body);
     } on Object catch (error) {
       // Only a closed exception category is retained. No headers, request
       // bodies, paths or exception descriptions are emitted into app logs.
       failures.add(error.runtimeType.toString());
+      failureStage = stage;
       try {
         request.response.statusCode = HttpStatus.internalServerError;
         await request.response.close();
