@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded structural verifier for the I1 unsigned, single-runner iOS IPA."""
+"""Shared bounded structural verifier for I1-I4 unsigned, single-runner iOS IPAs."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ APP_BUNDLE_ID = "cn.ustcassistant.ios.private"
 I1_MANIFEST_PATH = "Payload/Runner.app/ios-i1-provenance.json"
 I2_MANIFEST_PATH = "Payload/Runner.app/ios-i2-provenance.json"
 I3_MANIFEST_PATH = "Payload/Runner.app/ios-i3-provenance.json"
+I4_MANIFEST_PATH = "Payload/Runner.app/ios-i4-provenance.json"
 MANIFEST_PATH = I1_MANIFEST_PATH  # Keep the historical I1 default for callers/tests.
 APP_INFO_PATH = "Payload/Runner.app/Info.plist"
 RUNNER_EXECUTABLE_PATH = "Payload/Runner.app/Runner"
@@ -32,6 +33,13 @@ SCHOOL_SCRIPT_NAMES = ("jw_probe.js", "young_transport.js")
 SCHOOL_SCRIPT_MAX_BYTES = 512 * 1024
 I2_DEBUG_MARKERS = (b"i2Fixture", b"i2StoreExists")
 I3_DEBUG_MARKERS = (b"i3Fixture", b"i3ExportFixture")
+I4_DEBUG_MARKERS = (
+    b"i4HostFixture",
+    b"i4ImageFixture",
+    b"i4-image-fixture",
+    b"i4-synthetic-model-fixture",
+    b"IOSI4LoopbackProbe",
+)
 I3_NOTIFICATION_WIRING_MARKERS = (
     b"ustc_assistant/ios_notifications_v1",
     b"getPendingNotificationRequestsWithCompletionHandler:",
@@ -41,6 +49,42 @@ I3_NOTIFICATION_WIRING_MARKERS = (
 I3_DIAGNOSTIC_EXPORT_WIRING_MARKERS = (
     b"ustc_assistant/diagnostics_v1",
     b"initForExportingURLs:asCopy:",
+)
+I4_AGENT_IMAGE_WIRING_MARKERS = (
+    b"ustc_assistant/images_v1",
+    b"pickImages",
+    b"ustc_assistant/ios_host_lifecycle_v1",
+)
+I4_AGENT_PRODUCT_SURFACE_MARKERS = (
+    b"agent-composer",
+    b"agent-current-approval-open",
+)
+I4_DEBUG_ASSET_PATH_MARKERS = (
+    "i4hostfixture",
+    "i2fixture",
+    "i2storeexists",
+    "i3fixture",
+    "i3exportfixture",
+    "i4imagefixture",
+    "i4-image-fixture",
+    "i4_image_fixture",
+    "i4-synthetic-model-fixture",
+    "iosi4loopbackprobe",
+)
+I4_PROHIBITED_PERSISTENT_DATA_SUFFIXES = (
+    ".db",
+    ".sqlite",
+    ".sqlite3",
+    ".db-wal",
+    ".db-shm",
+    ".sqlite-wal",
+    ".sqlite-shm",
+    "-wal",
+    "-shm",
+    ".jsonl",
+    ".ics",
+    ".csv",
+    ".tsv",
 )
 
 MACHO_THIN_MAGICS = {
@@ -117,6 +161,8 @@ def _stage_manifest_path(stage: int) -> str:
         return I2_MANIFEST_PATH
     if stage == 3:
         return I3_MANIFEST_PATH
+    if stage == 4:
+        return I4_MANIFEST_PATH
     _fail("invalid_stage")
 
 
@@ -127,6 +173,8 @@ def _info_revision_key(stage: int) -> str:
         return "I2SourceRevision"
     if stage == 3:
         return "I3SourceRevision"
+    if stage == 4:
+        return "I4SourceRevision"
     _fail("invalid_stage")
 
 
@@ -190,6 +238,32 @@ def _validate_manifest(value: dict[str, Any], expected_revision: str, stage: int
                 _fail("invalid_manifest")
         if "diagnosticExport" in value:
             required["diagnosticExport"] = "system-documents-v1"
+    elif stage == 4:
+        required.update({
+            "kind": "ios-i4-unsigned-ipa-v1",
+            "scope": "i4-agent-images",
+            "authentication": "manual",
+            "schoolStore": "wk-uuid-v1",
+            "schoolScripts": value.get("schoolScripts"),
+            "notificationBackend": "user-notifications-v1",
+            "notificationCapacity": 60,
+            "dailyAuthentication": "manual",
+            "foregroundOnly": True,
+            "diagnosticExport": "system-documents-v1",
+            "agentInterface": "single-conversation-v1",
+            "imagePicker": "photosui-imageio-v1",
+        })
+        school_scripts = value.get("schoolScripts")
+        if not isinstance(school_scripts, dict) or set(school_scripts) != set(SCHOOL_SCRIPT_NAMES):
+            _fail("invalid_manifest")
+        for name in SCHOOL_SCRIPT_NAMES:
+            digest = school_scripts.get(name)
+            if (
+                not isinstance(digest, str)
+                or len(digest) != 64
+                or any(ch not in "0123456789abcdef" for ch in digest)
+            ):
+                _fail("invalid_manifest")
     else:
         _fail("invalid_stage")
     if set(value) != set(required):
@@ -217,9 +291,11 @@ def _validate_runner_info(value: dict[str, Any], expected_revision: str, stage: 
         _fail("platform_identity_mismatch")
     if value.get(_info_revision_key(stage)) != expected_revision:
         _fail("source_revision_mismatch")
-    if stage in (2, 3) and value.get("I1SourceRevision") != expected_revision:
+    if stage in (2, 3, 4) and value.get("I1SourceRevision") != expected_revision:
         _fail("source_revision_mismatch")
-    if stage == 3 and value.get("I2SourceRevision") != expected_revision:
+    if stage in (3, 4) and value.get("I2SourceRevision") != expected_revision:
+        _fail("source_revision_mismatch")
+    if stage == 4 and value.get("I3SourceRevision") != expected_revision:
         _fail("source_revision_mismatch")
     executable = value.get("CFBundleExecutable")
     if (
@@ -312,6 +388,17 @@ def _contains_remote_notification_entitlement(value: Any) -> bool:
     return False
 
 
+def _contains_photo_library_permission(value: Any) -> bool:
+    return any(
+        isinstance(item, dict)
+        and any(
+            isinstance(key, str) and key.casefold().startswith("nsphotolibrary")
+            for key in item
+        )
+        for item in _walk_plist_values(value)
+    )
+
+
 def _is_model_asset(path: str) -> bool:
     base = path.rsplit("/", 1)[-1].casefold()
     return base == "tokens.txt" or any(base.endswith(suffix) for suffix in MODEL_SUFFIXES)
@@ -339,6 +426,15 @@ def _validate_policy_paths(members: dict[str, zipfile.ZipInfo]) -> None:
         _fail("app_bundle_count_mismatch")
 
 
+def _validate_i4_package_assets(members: dict[str, zipfile.ZipInfo]) -> None:
+    for path in members:
+        folded = path.casefold()
+        if any(marker in folded for marker in I4_DEBUG_ASSET_PATH_MARKERS):
+            _fail("fixture_entry_point_present")
+        if folded.endswith(I4_PROHIBITED_PERSISTENT_DATA_SUFFIXES):
+            _fail("business_data_asset_present")
+
+
 def _parse_plist_member(zf: zipfile.ZipFile, members: dict[str, zipfile.ZipInfo], path: str) -> dict[str, Any]:
     info = _I0._required_member(members, path)
     data = _I0._read_member(zf, info, MAX_INFO_PLIST)
@@ -360,17 +456,19 @@ def _validate_info_and_entitlements(
             value = _parse_plist_member(zf, members, path)
             if _contains_audio_permission(value):
                 _fail("audio_permission_present")
-            if stage in (2, 3) and _contains_camera_or_location_permission(value):
+            if stage in (2, 3, 4) and _contains_camera_or_location_permission(value):
+                _fail("restricted_permission_present")
+            if stage == 4 and _contains_photo_library_permission(value):
                 _fail("restricted_permission_present")
             if _contains_prohibited_declaration(value):
                 _fail("app_group_declaration_present")
             if path == APP_INFO_PATH:
-                if stage in (2, 3) and any(
+                if stage in (2, 3, 4) and any(
                     isinstance(key, str) and key.casefold() == "nsapptransportsecurity"
                     for key in value
                 ):
                     _fail("transport_override_present")
-                if stage == 3 and any(
+                if stage in (3, 4) and any(
                     isinstance(key, str) and key.casefold() == "uibackgroundmodes"
                     for key in value
                 ):
@@ -380,7 +478,7 @@ def _validate_info_and_entitlements(
             value = _parse_plist_member(zf, members, path)
             if _contains_prohibited_declaration(value):
                 _fail("app_group_entitlement_present")
-            if stage == 3 and _contains_remote_notification_entitlement(value):
+            if stage in (3, 4) and _contains_remote_notification_entitlement(value):
                 _fail("remote_notifications_entitlement_present")
     if runner_info is None:
         _fail("missing_required_member")
@@ -435,7 +533,7 @@ def _validate_school_scripts(
     manifest: dict[str, Any],
     stage: int,
 ) -> None:
-    if stage not in (2, 3):
+    if stage not in (2, 3, 4):
         return
     declared = manifest["schoolScripts"]
     for name in SCHOOL_SCRIPT_NAMES:
@@ -590,7 +688,7 @@ def _parse_signature_superblob(data: bytes, stage: int = 1) -> None:
             _fail("invalid_signed_entitlements")
         if _contains_prohibited_declaration(entitlements):
             _fail("app_group_signature_entitlement")
-        if stage == 3 and _contains_remote_notification_entitlement(entitlements):
+        if stage in (3, 4) and _contains_remote_notification_entitlement(entitlements):
             _fail("remote_notifications_entitlement_present")
 
 
@@ -746,6 +844,8 @@ def _validate_all_contents(
     stage: int,
 ) -> bool:
     _validate_policy_paths(members)
+    if stage == 4:
+        _validate_i4_package_assets(members)
     manifest_path = _stage_manifest_path(stage)
     manifest_data = _I0._read_member(zf, _I0._required_member(members, manifest_path), _I0.MAX_MANIFEST)
     manifest = _I0._parse_json_manifest(manifest_data)
@@ -778,6 +878,22 @@ def _validate_all_contents(
             zf, runner_info, I3_DIAGNOSTIC_EXPORT_WIRING_MARKERS
         ):
             _fail("diagnostic_export_native_wiring_missing")
+    if stage == 4:
+        forbidden_markers = I2_DEBUG_MARKERS + I3_DEBUG_MARKERS + I4_DEBUG_MARKERS
+        app_aot_info = _I0._required_member(members, APP_FRAMEWORK_EXECUTABLE)
+        if any(
+            _contains_any_binary_marker(zf, binary_info, forbidden_markers)
+            for binary_info in (runner_info, app_aot_info)
+        ):
+            _fail("fixture_entry_point_present")
+        if not _contains_all_binary_markers(zf, app_aot_info, I4_AGENT_PRODUCT_SURFACE_MARKERS):
+            _fail("agent_product_surface_missing")
+        if not _contains_all_binary_markers(zf, runner_info, I3_NOTIFICATION_WIRING_MARKERS):
+            _fail("notification_native_wiring_missing")
+        if not _contains_all_binary_markers(zf, runner_info, I3_DIAGNOSTIC_EXPORT_WIRING_MARKERS):
+            _fail("diagnostic_export_native_wiring_missing")
+        if not _contains_all_binary_markers(zf, runner_info, I4_AGENT_IMAGE_WIRING_MARKERS):
+            _fail("agent_image_native_wiring_missing")
 
     framework_binaries = _validate_frameworks(zf, members, expected_revision)
     if APP_FRAMEWORK_EXECUTABLE not in framework_binaries:
@@ -789,7 +905,7 @@ def _validate_all_contents(
             if not info.is_dir() and _is_macho_magic(_read_prefix(zf, info)):
                 _inspect_macho_entitlements(zf, info, stage)
     _I0._validate_archive_contents(zf, infos, declared_total)
-    return stage == 3 and manifest.get("diagnosticExport") == "system-documents-v1"
+    return stage in (3, 4) and manifest.get("diagnosticExport") == "system-documents-v1"
 
 
 def _hash_stream(stream: BinaryIO) -> tuple[str, int]:
@@ -803,9 +919,9 @@ def verify_package(
     *,
     stage: int = 1,
 ) -> dict[str, Any]:
-    """Verify an I1, I2, or I3 unsigned IPA and return a path-free report."""
+    """Verify an I1, I2, I3, or I4 unsigned IPA and return a path-free report."""
 
-    if type(stage) is not int or stage not in (1, 2, 3):
+    if type(stage) is not int or stage not in (1, 2, 3, 4):
         _fail("invalid_stage")
     if not _expected_revision_is_valid(expected_revision):
         _fail("invalid_expected_revision")
@@ -850,11 +966,13 @@ def verify_package(
         1: "ios-i1-unsigned-ipa-v1",
         2: "ios-i2-unsigned-ipa-v1",
         3: "ios-i3-unsigned-ipa-v1",
+        4: "ios-i4-unsigned-ipa-v1",
     }[stage]
     scope = {
         1: "i1-storage-bootstrap",
         2: "i2-school-bridges",
         3: "i3-notifications-foreground",
+        4: "i4-agent-images",
     }[stage]
     checks: dict[str, bool] = {
         "archivePathsAndSizes": True,
@@ -876,6 +994,16 @@ def verify_package(
         checks["noBackgroundModesOrRemoteNotificationsEntitlement"] = True
         if has_diagnostic_export:
             checks["diagnosticExportNativeWiringStringsPresent"] = True
+    elif stage == 4:
+        checks["fixedSchoolReadersMatchSource"] = True
+        checks["noFixtureEntryPointsOrTransportOverrides"] = True
+        checks["notificationNativeWiringStringsPresent"] = True
+        checks["diagnosticExportNativeWiringStringsPresent"] = True
+        checks["agentImageNativeWiringStringsPresent"] = True
+        checks["agentProductSurfaceStringsPresent"] = True
+        checks["noI2I3I4FixtureAndLoopbackMarkersInRunnerOrAOT"] = True
+        checks["noBundledPersistentDataAssetFormats"] = True
+        checks["noBackgroundModesOrRemoteNotificationsEntitlement"] = True
     report: dict[str, Any] = {
         "reportVersion": 1,
         "artifactKind": artifact_kind,

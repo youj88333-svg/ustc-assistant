@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		F50000000000000000000001 /* IOSAgentImagePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000011; };
+		F50000000000000000000002 /* IOSAgentImageBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000012; };
+		F50000000000000000000003 /* IOSAgentHostLifecycleBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000013; };
 		F40000000000000000000001 /* IOSDiagnosticExportPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F40000000000000000000011; };
 		F40000000000000000000002 /* IOSDiagnosticExportBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = F40000000000000000000012; };
 		F30000000000000000000001 /* IOSNotificationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = F30000000000000000000011; };
@@ -54,6 +57,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		F50000000000000000000011 /* IOSAgentImagePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSAgentImagePolicy.swift; sourceTree = "<group>"; };
+		F50000000000000000000012 /* IOSAgentImageBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSAgentImageBridge.swift; sourceTree = "<group>"; };
+		F50000000000000000000013 /* IOSAgentHostLifecycleBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSAgentHostLifecycleBridge.swift; sourceTree = "<group>"; };
 		F40000000000000000000011 /* IOSDiagnosticExportPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSDiagnosticExportPolicy.swift; sourceTree = "<group>"; };
 		F40000000000000000000012 /* IOSDiagnosticExportBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSDiagnosticExportBridge.swift; sourceTree = "<group>"; };
 		F30000000000000000000011 /* IOSNotificationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSNotificationPolicy.swift; sourceTree = "<group>"; };
@@ -153,6 +159,9 @@
 				F30000000000000000000012 /* IOSNotificationBridge.swift */,
 				F40000000000000000000011 /* IOSDiagnosticExportPolicy.swift */,
 				F40000000000000000000012 /* IOSDiagnosticExportBridge.swift */,
+				F50000000000000000000011 /* IOSAgentImagePolicy.swift */,
+				F50000000000000000000012 /* IOSAgentImageBridge.swift */,
+				F50000000000000000000013 /* IOSAgentHostLifecycleBridge.swift */,
 				F20000000000000000000012 /* IOSSchoolPolicy.swift */,
 				F20000000000000000000013 /* IOSSchoolStoreLedger.swift */,
 				F20000000000000000000014 /* IOSSchoolScripts.swift */,
@@ -327,6 +336,9 @@
 				F30000000000000000000002 /* IOSNotificationBridge.swift in Sources */,
 				F40000000000000000000001 /* IOSDiagnosticExportPolicy.swift in Sources */,
 				F40000000000000000000002 /* IOSDiagnosticExportBridge.swift in Sources */,
+				F50000000000000000000001 /* IOSAgentImagePolicy.swift in Sources */,
+				F50000000000000000000002 /* IOSAgentImageBridge.swift in Sources */,
+				F50000000000000000000003 /* IOSAgentHostLifecycleBridge.swift in Sources */,
 				F20000000000000000000002 /* IOSSchoolPolicy.swift in Sources */,
 				F20000000000000000000003 /* IOSSchoolStoreLedger.swift in Sources */,
 				F20000000000000000000004 /* IOSSchoolScripts.swift in Sources */,

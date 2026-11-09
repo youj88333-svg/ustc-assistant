@@ -29,6 +29,7 @@ final class ProductApp extends StatelessWidget {
     this.destination,
     this.onDestinationChanged,
     this.scaffoldMessengerKey,
+    this.logsActionBuilder,
     this.home,
   });
 
@@ -39,6 +40,7 @@ final class ProductApp extends StatelessWidget {
   final ValueListenable<ShellDestination>? destination;
   final ValueChanged<ShellDestination>? onDestinationChanged;
   final GlobalKey<ScaffoldMessengerState>? scaffoldMessengerKey;
+  final WidgetBuilder? logsActionBuilder;
   final Widget? home;
 
   @override
@@ -91,6 +93,7 @@ final class ProductApp extends StatelessWidget {
           agentBuilder: agentBuilder,
           destination: destination,
           onDestinationChanged: onDestinationChanged,
+          logsActionBuilder: logsActionBuilder,
         ),
   );
 }
@@ -228,6 +231,7 @@ final class _ProductShell extends StatefulWidget {
     this.agentBuilder,
     this.destination,
     this.onDestinationChanged,
+    this.logsActionBuilder,
   });
 
   final AppShellPort controller;
@@ -236,6 +240,7 @@ final class _ProductShell extends StatefulWidget {
   final WidgetBuilder? agentBuilder;
   final ValueListenable<ShellDestination>? destination;
   final ValueChanged<ShellDestination>? onDestinationChanged;
+  final WidgetBuilder? logsActionBuilder;
 
   @override
   State<_ProductShell> createState() => _ProductShellState();
@@ -364,6 +369,8 @@ final class _ProductShellState extends State<_ProductShell> {
                       ),
                     ),
                     actions: [
+                      if (widget.logsActionBuilder != null)
+                        widget.logsActionBuilder!(context),
                       if (destination != ShellDestination.settings)
                         IconButton(
                           key: const ValueKey('shell-nav-settings'),
@@ -384,6 +391,10 @@ final class _ProductShellState extends State<_ProductShell> {
                       ),
                     ),
                     title: const Text('校园事务'),
+                    actions: [
+                      if (widget.logsActionBuilder != null)
+                        widget.logsActionBuilder!(context),
+                    ],
                   )
                 : null,
             drawer: narrow && !phone

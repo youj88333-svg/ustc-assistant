@@ -19,6 +19,8 @@ import 'app/diagnostics_panel.dart';
 import 'app/diagnostic_error_hooks.dart';
 import 'app/runtime_diagnostics.dart';
 import 'platform/agent_image_picker.dart';
+import 'platform/ios_agent_image_picker.dart';
+import 'platform/ios_agent_host_lifecycle.dart';
 import 'platform/transient_diagnostics.dart';
 import 'core/diagnostics_contract.dart';
 import 'core/application_version.dart';
@@ -83,8 +85,18 @@ Future<void> launchM0() async {
 }
 
 final class OwnedApplication extends StatefulWidget {
-  const OwnedApplication({super.key, required this.bootstrap});
+  const OwnedApplication({
+    super.key,
+    required this.bootstrap,
+    this.enableOnboarding = true,
+    this.privateBuildInformation,
+  });
   final RuntimeBootstrap bootstrap;
+
+  /// The private iOS installation uses existing settings without requiring the
+  /// desktop/mobile onboarding flow or rewriting its stored progress.
+  final bool enableOnboarding;
+  final String? privateBuildInformation;
   @override
   State<OwnedApplication> createState() => _OwnedAppState();
 }
@@ -99,6 +111,9 @@ final class _OwnedAppState extends State<OwnedApplication> {
   DemoRuntime? _boundRuntime;
   OnboardingController? _onboarding;
   StreamSubscription<ReminderTarget>? _reminderNavigation;
+  StreamSubscription<IOSAgentHostState>? _iosHostSubscription;
+  bool _iosHostActive = false;
+  bool _disposing = false;
   int _runtimeGeneration = 0;
   final _messengerKey = GlobalKey<ScaffoldMessengerState>();
   @override
@@ -116,12 +131,24 @@ final class _OwnedAppState extends State<OwnedApplication> {
         }
       },
     );
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      _iosHostSubscription = const IOSAgentHostLifecycle().changes.listen(
+        _onIOSHostActivity,
+        onError: (Object _) => _onIOSHostActivity(IOSAgentHostState.revoked),
+        onDone: () => _onIOSHostActivity(IOSAgentHostState.revoked),
+      );
+    }
   }
 
   @override
   void dispose() {
+    _disposing = true;
+    final previousRuntime = _boundRuntime;
+    if (previousRuntime != null) _setAgentHostAvailable(previousRuntime, false);
     _runtimeGeneration++;
+    _cancelIOSImageSelection();
     _reminderNavigation?.cancel();
+    _iosHostSubscription?.cancel();
     _onboarding?.removeListener(_onboardingChanged);
     _onboarding?.dispose();
     _diagnosticErrors.dispose();
@@ -148,6 +175,19 @@ final class _OwnedAppState extends State<OwnedApplication> {
   void _onLifecycleStateChanged(AppLifecycleState state) {
     final runtime = _boundRuntime;
     if (runtime == null) return;
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      // Flutter may be hidden by a controlled native window. Actual UIKit
+      // activity drives model/approval revocation; surface state only gates
+      // automatic background work.
+      if (state == AppLifecycleState.resumed && _iosHostActive) {
+        _syncAutomaticForeground();
+        runtime.reminders.onForeground();
+      } else {
+        runtime.morning.onForeground(false);
+        runtime.youngDaily.onForeground(false);
+      }
+      return;
+    }
     switch (state) {
       case AppLifecycleState.resumed:
         _setAgentHostAvailable(runtime, true);
@@ -166,6 +206,23 @@ final class _OwnedAppState extends State<OwnedApplication> {
     }
   }
 
+  void _onIOSHostActivity(IOSAgentHostState state) {
+    if (_disposing || !mounted) return;
+    final active = state == IOSAgentHostState.active;
+    _iosHostActive = active;
+    if (state == IOSAgentHostState.revoked) _cancelIOSImageSelection();
+    final runtime = _boundRuntime;
+    if (runtime == null) return;
+    _setAgentHostAvailable(runtime, active);
+    if (active) {
+      _syncAutomaticForeground();
+      runtime.reminders.onForeground();
+    } else {
+      runtime.morning.onForeground(false);
+      runtime.youngDaily.onForeground(false);
+    }
+  }
+
   void _onboardingChanged() {
     if (!mounted) return;
     _syncAutomaticForeground();
@@ -177,14 +234,18 @@ final class _OwnedAppState extends State<OwnedApplication> {
     if (runtime == null) return;
     final state = WidgetsBinding.instance.lifecycleState;
     final allowed =
-        _onboarding?.blocksAutomatic == false &&
+        (!widget.enableOnboarding || _onboarding?.blocksAutomatic == false) &&
+        (defaultTargetPlatform != TargetPlatform.iOS || _iosHostActive) &&
         (state == null || state == AppLifecycleState.resumed);
     runtime.morning.onForeground(allowed);
     runtime.youngDaily.onForeground(allowed);
   }
 
   void _setAgentHostAvailable(DemoRuntime runtime, bool available) {
-    if (defaultTargetPlatform != TargetPlatform.android) return;
+    if (defaultTargetPlatform != TargetPlatform.android &&
+        defaultTargetPlatform != TargetPlatform.iOS) {
+      return;
+    }
     unawaited(
       runtime.agentCoordinator.setHostAvailable(available).catchError((
         Object _,
@@ -204,8 +265,29 @@ final class _OwnedAppState extends State<OwnedApplication> {
     );
   }
 
+  void _cancelIOSImageSelection() {
+    if (defaultTargetPlatform != TargetPlatform.iOS) return;
+    final diagnostics = widget.bootstrap.diagnostics;
+    unawaited(
+      cancelIOSAgentImages().catchError((Object _) {
+        recordDiagnostic(
+          diagnostics,
+          const DiagnosticEvent(
+            name: DiagnosticEventName.imageInputStage,
+            stage: DiagnosticStage.imagePicker,
+            outcome: DiagnosticOutcome.recovery,
+            code: DiagnosticCode.cleanupPending,
+          ),
+        );
+      }),
+    );
+  }
+
   void _bindRuntime(DemoRuntime? runtime) {
     if (identical(_boundRuntime, runtime)) return;
+    final previousRuntime = _boundRuntime;
+    if (previousRuntime != null) _setAgentHostAvailable(previousRuntime, false);
+    _cancelIOSImageSelection();
     _boundRuntime?.morning.onForeground(false);
     _boundRuntime?.youngDaily.onForeground(false);
     _onboarding?.removeListener(_onboardingChanged);
@@ -216,8 +298,15 @@ final class _OwnedAppState extends State<OwnedApplication> {
     _reminderNavigation = null;
     _boundRuntime = runtime;
     if (runtime == null) return;
-    _onboarding = OnboardingController(runtime.jwStore.onboarding)
-      ..addListener(_onboardingChanged);
+    if (defaultTargetPlatform == TargetPlatform.iOS) {
+      // Establish the fail-closed native activity gate before exposing any
+      // product subtree, rather than waiting for its first rendered frame.
+      _setAgentHostAvailable(runtime, _iosHostActive);
+    }
+    if (widget.enableOnboarding) {
+      _onboarding = OnboardingController(runtime.jwStore.onboarding)
+        ..addListener(_onboardingChanged);
+    }
 
     final generation = _runtimeGeneration;
     _reminderNavigation = runtime.reminders.navigation.listen(
@@ -239,9 +328,11 @@ final class _OwnedAppState extends State<OwnedApplication> {
       final state = WidgetsBinding.instance.lifecycleState;
       _setAgentHostAvailable(
         runtime,
-        state == null ||
-            state == AppLifecycleState.resumed ||
-            state == AppLifecycleState.inactive,
+        defaultTargetPlatform == TargetPlatform.iOS
+            ? _iosHostActive
+            : state == null ||
+                  state == AppLifecycleState.resumed ||
+                  state == AppLifecycleState.inactive,
       );
       if (state == null || state == AppLifecycleState.resumed) {
         _syncAutomaticForeground();
@@ -374,12 +465,17 @@ final class _OwnedAppState extends State<OwnedApplication> {
         _evidenceTasks = false;
       }
       _navigationResetEpoch = resetEpoch;
+      final showOnboarding =
+          widget.enableOnboarding && (_onboarding?.showSetup ?? true);
       return ProductApp(
         scaffoldMessengerKey: _messengerKey,
+        logsActionBuilder: defaultTargetPlatform == TargetPlatform.iOS
+            ? (_) => DiagnosticsExportButton(diagnostics: runtime.diagnostics)
+            : null,
         key: ValueKey(
-          'product-${view.snapshot?.context.resetEpoch}-${_onboarding!.showSetup}',
+          'product-${view.snapshot?.context.resetEpoch}-$showOnboarding',
         ),
-        home: _onboarding!.showSetup
+        home: showOnboarding
             ? OnboardingPage(
                 key: ValueKey(view.snapshot?.context.resetEpoch),
                 progress: _onboarding!,
@@ -412,9 +508,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
           morningNowUtc: () => runtime.clock.nowUtc,
           onMorningRetry: () => runtime.morning.check(manual: true),
           openMorningSource: (uri) => _openRestrictedExternalLink(context, uri),
-          pickImages: defaultTargetPlatform == TargetPlatform.iOS
-              ? null
-              : () => pickAgentImages(diagnostics: runtime.diagnostics),
+          pickImages: () => pickAgentImages(diagnostics: runtime.diagnostics),
           onModelValidation: () async {
             try {
               final runner = await runtime.agent.openBehaviorValidation();
@@ -475,9 +569,12 @@ final class _OwnedAppState extends State<OwnedApplication> {
             MaterialPageRoute<void>(
               builder: (context) => Scaffold(
                 appBar: AppBar(title: const Text('Agent 设置')),
-                body: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: AgentSettingsPanel(controller: runtime.agent),
+                body: SafeArea(
+                  top: false,
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: AgentSettingsPanel(controller: runtime.agent),
+                  ),
                 ),
               ),
             ),
@@ -515,19 +612,22 @@ final class _OwnedAppState extends State<OwnedApplication> {
           },
         ),
         settingsBuilder: (context) => ApplicationSettingsPage(
-          onOpenSetup: () async {
-            final progress = _onboarding;
-            if (progress == null ||
-                runtime.shell.view.globallyBusy ||
-                runtime.shell.view.actionPending ||
-                runtime.shell.view.progressUnavailable ||
-                runtime.agent.view.busy ||
-                progress.pending) {
-              return;
-            }
-            _destination.value = ShellDestination.agent;
-            await progress.reopen();
-          },
+          privateBuildInformation: widget.privateBuildInformation,
+          onOpenSetup: !widget.enableOnboarding
+              ? null
+              : () async {
+                  final progress = _onboarding;
+                  if (progress == null ||
+                      runtime.shell.view.globallyBusy ||
+                      runtime.shell.view.actionPending ||
+                      runtime.shell.view.progressUnavailable ||
+                      runtime.agent.view.busy ||
+                      progress.pending) {
+                    return;
+                  }
+                  _destination.value = ShellDestination.agent;
+                  await progress.reopen();
+                },
           dailySync: runtime.youngDaily,
           settings: runtime.settings,
           controller: runtime.shell,

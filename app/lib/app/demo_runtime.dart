@@ -301,6 +301,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
     String? jwDirectoryPath,
     AppClock clock = const SystemClock(),
     Duration collectionDelay = const Duration(milliseconds: 450),
+    String diagnosticApplicationVersion = applicationVersion,
     Future<void> Function()? onActivationCheckpoint,
     @visibleForTesting ModelGatewayPort? modelGateway,
     @visibleForTesting ModelCredentialProtector? modelCredentialProtector,
@@ -352,8 +353,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
           );
         },
         clock: clock,
-        versions: const DiagnosticVersions(
-          application: applicationVersion,
+        versions: DiagnosticVersions(
+          application: diagnosticApplicationVersion,
           schema: JwStore.currentSchemaVersion,
           tools: agentToolRegistryVersion,
           prompt: agentPromptVersion,

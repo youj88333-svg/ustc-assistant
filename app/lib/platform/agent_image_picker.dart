@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import '../core/agent_contract.dart';
 import '../core/diagnostics_contract.dart';
 import 'android_file_access.dart';
+import 'ios_agent_image_picker.dart';
 
 const _maximumOriginalBytes = 10 * 1024 * 1024;
 const _maximumPixels = 16 * 1000 * 1000;
@@ -28,6 +29,9 @@ Future<List<AgentImage>> pickAgentImages({DiagnosticsPort? diagnostics}) async {
     ).pickImages();
     if (originals.isEmpty) return const [];
     return normalizeAndroidImages(originals, diagnostics: diagnostics);
+  }
+  if (Platform.isIOS) {
+    return pickIOSAgentImages(diagnostics: diagnostics);
   }
   final List<XFile> files;
   try {

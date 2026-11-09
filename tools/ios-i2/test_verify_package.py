@@ -264,7 +264,7 @@ class VerifyI2PackageTests(unittest.TestCase):
 
     def test_unknown_or_mistyped_stages_are_rejected_by_shared_auditor(self) -> None:
         ipa = self.ipa()
-        for stage in (0, 4, True, 2.0, "2"):
+        for stage in (0, 5, True, 2.0, "2"):
             with self.subTest(stage=stage):
                 self.assert_reason(
                     "invalid_stage",

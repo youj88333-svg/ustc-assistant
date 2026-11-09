@@ -55,10 +55,16 @@ class _M0AppState extends State<M0App> {
 }
 
 class M0StartupFailureApp extends StatelessWidget {
-  const M0StartupFailureApp({super.key, required this.code, this.diagnostics});
+  const M0StartupFailureApp({
+    super.key,
+    required this.code,
+    this.diagnostics,
+    this.onRetry,
+  });
 
   final FailureCode code;
   final DiagnosticsPort? diagnostics;
+  final Future<void> Function()? onRetry;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -96,6 +102,15 @@ class M0StartupFailureApp extends StatelessWidget {
                         const SizedBox(height: 12),
                         const Text('导出只包含本次启动错误；已有日志未读取。'),
                         DiagnosticsExportButton(diagnostics: diagnostics!),
+                      ],
+                      if (onRetry != null) ...[
+                        const SizedBox(height: 12),
+                        FilledButton.icon(
+                          key: const ValueKey('startup-retry'),
+                          onPressed: onRetry,
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('重试'),
+                        ),
                       ],
                     ],
                   ),

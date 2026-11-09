@@ -31,6 +31,7 @@ final class ApplicationSettingsPage extends StatefulWidget {
     this.logsActionBuilder,
     this.dailySync,
     this.onOpenSetup,
+    this.privateBuildInformation,
   });
 
   final ApplicationSettingsPort settings;
@@ -42,6 +43,7 @@ final class ApplicationSettingsPage extends StatefulWidget {
   final WidgetBuilder? logsActionBuilder;
   final YoungDailySyncControlPort? dailySync;
   final Future<void> Function()? onOpenSetup;
+  final String? privateBuildInformation;
 
   @override
   State<ApplicationSettingsPage> createState() =>
@@ -928,9 +930,16 @@ final class _ApplicationSettingsPageState
   Widget _aboutSection() => _sectionScroll(
     children: [
       _SettingsCard(
-        title: 'USTC Assistant · $applicationDisplayVersion',
-        child: Text(
-          '工程版本 $applicationVersion · ${defaultTargetPlatform == TargetPlatform.android ? 'Android 开发验证版' : 'Windows x64 私有交付版'}',
+        title: widget.privateBuildInformation == null
+            ? 'USTC Assistant · $applicationDisplayVersion'
+            : 'USTC Assistant · iOS 私用版',
+        child: SelectableText(
+          widget.privateBuildInformation ??
+              '工程版本 $applicationVersion · ${switch (defaultTargetPlatform) {
+                TargetPlatform.android => 'Android 开发验证版',
+                TargetPlatform.iOS => 'iOS 私用版',
+                _ => 'Windows x64 私有交付版',
+              }}',
         ),
       ),
       const SizedBox(height: 12),
