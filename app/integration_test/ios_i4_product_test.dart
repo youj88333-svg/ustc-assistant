@@ -1241,7 +1241,7 @@ Future<AgentImage> _makeImage() async {
   final image = await picture.toImage(8, 8);
   try {
     final data = (await image.toByteData(format: ui.ImageByteFormat.png))!;
-    return normalizeAgentImage(
+    return await normalizeAgentImage(
       data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
     );
   } finally {
