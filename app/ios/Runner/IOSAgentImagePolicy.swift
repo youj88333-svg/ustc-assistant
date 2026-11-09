@@ -50,7 +50,7 @@ enum IOSAgentImagePolicy {
     original.reserveCapacity(Int(info.st_size))
     defer { original.resetBytes(in: 0..<original.count) }
     var chunk = [UInt8](repeating: 0, count: 64 * 1024)
-    defer { chunk.withUnsafeMutableBytes { $0.initializeMemory(as: UInt8.self, repeating: 0) } }
+    defer { _ = chunk.withUnsafeMutableBytes { $0.initializeMemory(as: UInt8.self, repeating: 0) } }
     while true {
       let count = chunk.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
       if count < 0 {

@@ -26,10 +26,18 @@ private struct IOSAgentImagePolicyMain {
     defer { try? FileManager.default.removeItem(at: root) }
 
     var checks: [String: String] = [:]
+    var details: [String: [String: Any]] = [:]
     func record(_ name: String, _ status: String) { checks[name] = status }
     func run(_ name: String, _ check: () throws -> Bool) {
       do { record(name, try check() ? "pass" : "fail") }
-      catch { record(name, "fail") }
+      catch let failure as IOSAgentImagePolicyFailure {
+        switch failure {
+        case .resourceLimit: details[name] = ["failure": "resource_limit"]
+        case .imageRejected: details[name] = ["failure": "image_rejected"]
+        }
+        record(name, "fail")
+      }
+      catch { details[name] = ["failure": "synthetic_io_or_encode"]; record(name, "fail") }
     }
 
     run("static_png") {
@@ -55,7 +63,9 @@ private struct IOSAgentImagePolicyMain {
       ]
       try writeImage(makeImage(width: 4, height: 2), to: source,
                      type: UTType.jpeg.identifier, properties: metadata)
+      details["jpeg_source"] = outputSummary(try Data(contentsOf: source))
       let output = try IOSAgentImagePolicy.normalize(fileAt: source)
+      details["jpeg_orientation_and_metadata"] = outputSummary(output)
       guard hasSize(output, width: 2, height: 4),
             let properties = outputProperties(output) else {
         return false
@@ -109,6 +119,7 @@ private struct IOSAgentImagePolicyMain {
       let exactSize = try source.resourceValues(forKeys: [.fileSizeKey]).fileSize
       guard exactSize == IOSAgentImagePolicy.maximumOriginalBytes else { return false }
       let output = try IOSAgentImagePolicy.normalize(fileAt: source)
+      details["ten_mib_source_limit_inclusive"] = outputSummary(output)
       return hasSize(output, width: 8, height: 6)
     }
 
@@ -209,7 +220,7 @@ private struct IOSAgentImagePolicyMain {
 
     let ok = !checks.values.contains("fail")
     emit(["kind": "ios-i4-image-policy-self-test-v1", "ok": ok,
-          "checks": checks])
+          "checks": checks, "details": details])
     exit(ok ? 0 : 1)
   }
 
@@ -315,6 +326,21 @@ private struct IOSAgentImagePolicyMain {
       return nil
     }
     return (width.intValue, height.intValue)
+  }
+
+  // Only fixed synthetic samples enter this CLI. These closed output facts
+  // distinguish a decoder/encoder difference from an invalid test assertion;
+  // source URLs and arbitrary property values are never printed.
+  private static func outputSummary(_ data: Data) -> [String: Any] {
+    let properties = outputProperties(data) ?? [:]
+    let size = outputSize(data) ?? (0, 0)
+    return [
+      "width": size.0, "height": size.1, "bytes": data.count,
+      "exif": properties[kCGImagePropertyExifDictionary] != nil,
+      "gps": properties[kCGImagePropertyGPSDictionary] != nil,
+      "tiff": properties[kCGImagePropertyTIFFDictionary] != nil,
+      "orientation": (properties[kCGImagePropertyOrientation] as? NSNumber)?.intValue ?? 0,
+    ]
   }
 
   private static func hasSize(_ data: Data, width: Int, height: Int) -> Bool {
