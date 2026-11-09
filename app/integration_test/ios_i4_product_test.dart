@@ -144,10 +144,15 @@ void main() {
       var startupStage = 'entryMetadata';
       String? startupFailure;
       final captureKey = GlobalKey();
+      final inputWasRegistered = binding.testTextInput.isRegistered;
       final ratio = tester.view.devicePixelRatio;
       tester.view.physicalSize = Size(393 * ratio, 852 * ratio);
       tester.platformDispatcher.textScaleFactorTestValue = 1;
       try {
+        // This journey injects text and keyboard insets; it does not claim
+        // physical iOS keyboard evidence. Avoid racing that injected text
+        // with a second, real platform IME connection in IntegrationTest.
+        binding.testTextInput.register();
         await tester.runAsync(service.start);
         final http = _LoopbackOnlyHttpOverrides(service.baseUri);
         HttpOverrides.global = http;
@@ -815,6 +820,7 @@ void main() {
           tester.view.resetPhysicalSize();
           tester.platformDispatcher.clearTextScaleFactorTestValue();
           HttpOverrides.global = previousHttpOverrides;
+          if (!inputWasRegistered) binding.testTextInput.unregister();
         }
       }
     },
@@ -1212,11 +1218,33 @@ Future<void> _sendFromProduct(WidgetTester tester, String text) async {
   await _dismissSheetIfPresent(tester);
   final composer = find.byKey(const ValueKey('agent-composer'));
   await tester.ensureVisible(composer);
+  await _pumpUntil(
+    tester,
+    () => tester.widget<TextField>(composer).enabled != false,
+    reason: 'product composer finishes its previous UI operation',
+  );
   await tester.enterText(composer, text);
   await _frames(tester, count: 2);
   final send = find.byKey(const ValueKey('agent-send'));
   await tester.ensureVisible(send);
-  expect(tester.widget<IconButton>(send).onPressed, isNotNull);
+  try {
+    await _pumpUntil(
+      tester,
+      () => tester.widget<IconButton>(send).onPressed != null,
+      reason: 'product send control accepts the current synthetic draft',
+    );
+  } on Object {
+    final view = tester
+        .widget<AgentWorkspacePage>(find.byType(AgentWorkspacePage))
+        .controller
+        .view;
+    final field = tester.widget<TextField>(composer);
+    debugPrint(
+      'I4 composer failure facts: ${jsonEncode({'phase': view.phase.name, 'failure': view.failure?.name, 'busy': view.busy, 'canSend': view.canSend, 'fieldEnabled': field.enabled, 'draftMatches': field.controller!.text == text, 'draftEmpty': field.controller!.text.isEmpty})}',
+    );
+    rethrow;
+  }
+  expect(tester.widget<TextField>(composer).controller!.text, text);
   await tester.tap(send);
   FocusManager.instance.primaryFocus?.unfocus();
   await _frames(tester, count: 2);
