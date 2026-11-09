@@ -37,14 +37,19 @@ final class IOSAgentHostLifecycleBridge: NSObject, FlutterStreamHandler {
 
   private func emitCurrent() {
     guard !closed else { return }
+    sink?(currentState())
+  }
+
+  private func currentState() -> String {
+    guard !closed else { return "revoked" }
     #if DEBUG && targetEnvironment(simulator)
-    if let value = fixtureState { sink?(value); return }
+    if let value = fixtureState { return value }
     #endif
     let application = UIApplication.shared
     if !application.isProtectedDataAvailable || application.applicationState == .background {
-      sink?("revoked")
+      return "revoked"
     } else {
-      sink?(application.applicationState == .active ? "active" : "inactive")
+      return application.applicationState == .active ? "active" : "inactive"
     }
   }
 
@@ -76,6 +81,7 @@ final class IOSAgentHostLifecycleBridge: NSObject, FlutterStreamHandler {
   deinit { observers.forEach { NotificationCenter.default.removeObserver($0) } }
 
   #if DEBUG && targetEnvironment(simulator)
+  func i4HostFixtureInspect() -> String { currentState() }
   func i4HostFixtureSuspend() { fixtureState = "revoked"; emitCurrent() }
   func i4HostFixtureResume() { fixtureState = nil; emitCurrent() }
   #endif

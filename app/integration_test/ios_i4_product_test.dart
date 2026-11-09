@@ -171,7 +171,7 @@ void main() {
         expect(service.bodies, isEmpty);
         debugPrint('I4 native product: one fresh owned product runtime opened');
 
-        await _configureFromProduct(tester, runtime);
+        await _configureFromProduct(tester, runtime, service, http);
         expect(service.modelRequests, 2);
         expect(service.probeProof, startsWith('ustc-result-'));
         expect(service.probeResultBody, isNotNull);
@@ -745,6 +745,8 @@ void main() {
 Future<void> _configureFromProduct(
   WidgetTester tester,
   DemoRuntime runtime,
+  _LoopbackService service,
+  _LoopbackOnlyHttpOverrides http,
 ) async {
   await _tap(tester, 'agent-settings-open');
   await _tap(tester, 'agent-use-policy-full-settings');
@@ -752,6 +754,14 @@ Future<void> _configureFromProduct(
   await tester.ensureVisible(load);
   expect(tester.widget<OutlinedButton>(load).onPressed, isNull);
   await _tap(tester, 'agent-settings-consent');
+  expect(
+    tester
+        .widget<CheckboxListTile>(
+          find.byKey(const ValueKey('agent-settings-consent')),
+        )
+        .value,
+    isTrue,
+  );
   await _pumpUntil(
     tester,
     () => !runtime.agent.view.busy,
@@ -760,14 +770,46 @@ Future<void> _configureFromProduct(
   final key = find.byKey(const ValueKey('agent-settings-key'));
   await tester.ensureVisible(key);
   await tester.enterText(key, _key);
+  expect(tester.widget<TextField>(key).controller!.text, _key);
   await _tap(tester, 'agent-settings-load-models');
-  await _pumpUntil(
-    tester,
-    () =>
-        !runtime.agent.view.busy &&
-        runtime.agent.view.availableModels.contains(_model),
-    reason: 'actual loopback directory response',
-  );
+  try {
+    await _pumpUntil(
+      tester,
+      () =>
+          !runtime.agent.view.busy &&
+          (runtime.agent.view.availableModels.contains(_model) ||
+              runtime.agent.view.failure != null),
+      reason: 'actual loopback directory response',
+    );
+    expect(
+      runtime.agent.view.availableModels,
+      contains(_model),
+      reason: 'directory configuration must succeed',
+    );
+  } on Object {
+    final host = await tester.runAsync(
+      () => _platform.invokeMethod<String>('i4HostFixtureInspect'),
+    );
+    final view = runtime.agent.view;
+    debugPrint(
+      'I4 directory failure facts: ${jsonEncode({
+        'phase': view.phase.name,
+        'failure': view.failure?.name,
+        'busy': view.busy,
+        'models': view.availableModels.length,
+        'pendingCandidate': view.pendingKeyProvided,
+        'provider': view.settings?.provider.name,
+        'nativeHost': const {'active', 'inactive', 'revoked'}.contains(host) ? host : 'invalid',
+        'directoryRequests': service.modelRequests,
+        'bodyRequests': service.bodies.length,
+        'serverFailureCount': service.failures.length,
+        'clientCreations': http.clientCreations,
+        'socketCreations': http.socketCreations,
+        'deniedConnections': http.deniedConnections,
+      })}',
+    );
+    rethrow;
+  }
   expect(tester.widget<TextField>(key).controller!.text, isEmpty);
   await _tap(tester, 'agent-settings-model-school');
   await tester.tap(find.text(_model).last);
@@ -1533,15 +1575,20 @@ Future<void> _writeTool(
 final class _LoopbackOnlyHttpOverrides extends HttpOverrides {
   _LoopbackOnlyHttpOverrides(this.origin);
   final Uri origin;
+  var clientCreations = 0;
+  var socketCreations = 0;
+  var deniedConnections = 0;
 
   @override
   HttpClient createHttpClient(SecurityContext? context) {
+    clientCreations++;
     final client = super.createHttpClient(context);
     client.findProxy = (uri) {
       if (uri.scheme != 'http' ||
           uri.host != '127.0.0.1' ||
           uri.port != origin.port ||
           uri.userInfo.isNotEmpty) {
+        deniedConnections++;
         throw StateError('i4_non_loopback_http_rejected');
       }
       return 'DIRECT';
@@ -1555,8 +1602,10 @@ final class _LoopbackOnlyHttpOverrides extends HttpOverrides {
           uri.port != origin.port ||
           uri.userInfo.isNotEmpty ||
           proxyHost != null) {
+        deniedConnections++;
         throw StateError('i4_non_loopback_socket_rejected');
       }
+      socketCreations++;
       return Socket.startConnect(InternetAddress.loopbackIPv4, origin.port);
     };
     return client;

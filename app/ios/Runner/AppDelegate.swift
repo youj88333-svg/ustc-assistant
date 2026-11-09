@@ -123,6 +123,8 @@ import UIKit
           "imagePicker": "photosui-imageio-v1"
         ])
         #if DEBUG && targetEnvironment(simulator)
+        case "i4HostFixtureInspect":
+          reply(self.agentHostBridge?.i4HostFixtureInspect() ?? "revoked")
         case "i4HostFixtureSuspend":
           self.agentHostBridge?.i4HostFixtureSuspend(); reply(nil)
         case "i4HostFixtureResume":
