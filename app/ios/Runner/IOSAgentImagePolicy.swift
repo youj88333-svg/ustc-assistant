@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 import Darwin
@@ -104,7 +105,23 @@ enum IOSAgentImagePolicy {
       throw IOSAgentImagePolicyFailure.imageRejected
     }
 
+    // Render into a new, fixed sRGB bitmap. No source profile, auxiliary data
+    // or property dictionary belongs to the new pixel image.
+    let rowBytes = outputWidth * 4
+    guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+          let bitmap = CGContext(data: nil, width: outputWidth, height: outputHeight,
+            bitsPerComponent: 8, bytesPerRow: rowBytes, space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+      throw IOSAgentImagePolicyFailure.imageRejected
+    }
+    defer { if let pixels = bitmap.data { memset(pixels, 0, rowBytes * outputHeight) } }
+    bitmap.draw(thumbnail, in: CGRect(x: 0, y: 0, width: outputWidth, height: outputHeight))
+    guard let pixelImage = bitmap.makeImage() else {
+      throw IOSAgentImagePolicyFailure.imageRejected
+    }
+
     let encoded = NSMutableData()
+    defer { encoded.resetBytes(in: NSRange(location: 0, length: encoded.length)) }
     guard let destination = CGImageDestinationCreateWithData(
       encoded, UTType.png.identifier as CFString, 1, nil
     ) else {
@@ -112,16 +129,7 @@ enum IOSAgentImagePolicy {
     }
     // Do not copy source property dictionaries: that would retain EXIF/GPS,
     // timestamps, camera identifiers, and other source metadata.
-    let strippedProperties: [CFString: Any] = [
-      kCGImagePropertyExifDictionary: NSNull(),
-      kCGImagePropertyExifAuxDictionary: NSNull(),
-      kCGImagePropertyGPSDictionary: NSNull(),
-      kCGImagePropertyTIFFDictionary: NSNull(),
-      kCGImagePropertyIPTCDictionary: NSNull(),
-      kCGImageMetadataShouldExcludeGPS: true,
-      kCGImageMetadataShouldExcludeXMP: true,
-    ]
-    CGImageDestinationAddImage(destination, thumbnail, strippedProperties as CFDictionary)
+    CGImageDestinationAddImage(destination, pixelImage, nil)
     guard CGImageDestinationFinalize(destination) else {
       encoded.resetBytes(in: NSRange(location: 0, length: encoded.length))
       throw IOSAgentImagePolicyFailure.imageRejected
@@ -131,7 +139,61 @@ enum IOSAgentImagePolicy {
       encoded.resetBytes(in: NSRange(location: 0, length: encoded.length))
       throw IOSAgentImagePolicyFailure.resourceLimit
     }
-    return encoded
+    return try canonicalEncoderPNG(encoded)
+  }
+
+  /// Inspect only this function's own ImageIO PNG, never an arbitrary source.
+  /// Some ImageIO encoders synthesize EXIF even with nil properties. Keep only
+  /// decoding chunks and color information from the fixed sRGB bitmap, so
+  /// personal/text/EXIF/time chunks cannot cross the byte channel.
+  private static func canonicalEncoderPNG(_ encoded: NSMutableData) throws -> NSMutableData {
+    let bytes = UnsafeBufferPointer(start: encoded.bytes.assumingMemoryBound(to: UInt8.self), count: encoded.length)
+    let signature: [UInt8] = [137, 80, 78, 71, 13, 10, 26, 10]
+    guard bytes.count >= 8, Array(bytes.prefix(8)) == signature else {
+      throw IOSAgentImagePolicyFailure.imageRejected
+    }
+    let kept = NSMutableData()
+    var transferred = false
+    defer { if !transferred { kept.resetBytes(in: NSRange(location: 0, length: kept.length)) } }
+    kept.append(encoded.bytes, length: 8)
+    var offset = 8
+    var hasHeader = false
+    var hasPixels = false
+    var ended = false
+    while offset <= bytes.count - 12 {
+      let size = (0..<4).reduce(0) { ($0 << 8) | Int(bytes[offset + $1]) }
+      guard size <= bytes.count - offset - 12,
+            let type = String(bytes: bytes[(offset + 4)..<(offset + 8)], encoding: .ascii) else {
+        throw IOSAgentImagePolicyFailure.imageRejected
+      }
+      if !hasHeader && type != "IHDR" { throw IOSAgentImagePolicyFailure.imageRejected }
+      switch type {
+      case "IHDR":
+        guard !hasHeader, size == 13, offset == 8 else { throw IOSAgentImagePolicyFailure.imageRejected }
+        hasHeader = true
+      case "IDAT": hasPixels = true
+      case "IEND":
+        guard hasPixels, size == 0, offset + 12 == bytes.count else { throw IOSAgentImagePolicyFailure.imageRejected }
+        ended = true
+      case "PLTE", "tRNS", "sRGB", "iCCP", "gAMA", "cHRM":
+        guard !hasPixels else { throw IOSAgentImagePolicyFailure.imageRejected }
+      default:
+        // W3C PNG: unknown critical chunks cannot be ignored. Ancillary
+        // chunks outside the closed output set are deliberately discarded.
+        guard bytes[offset + 4] & 0x20 != 0 else { throw IOSAgentImagePolicyFailure.imageRejected }
+      }
+      if ["IHDR", "IDAT", "IEND", "PLTE", "tRNS", "sRGB", "iCCP", "gAMA", "cHRM"].contains(type) {
+        kept.append(encoded.bytes.advanced(by: offset), length: size + 12)
+      }
+      offset += size + 12
+    }
+    guard hasHeader, hasPixels, ended, offset == bytes.count,
+          kept.length <= maximumNormalizedBytes else {
+      kept.resetBytes(in: NSRange(location: 0, length: kept.length))
+      throw IOSAgentImagePolicyFailure.imageRejected
+    }
+    transferred = true
+    return kept
   }
 
   private static func positiveInteger(_ value: Any?) -> Int? {
