@@ -275,11 +275,11 @@ void main() {
         // Keep this bounded, deliberately long acceptance conversation away
         // from automatic compaction. The explicit compact operation below
         // still travels through the actual model gateway and C3 summary port.
+        // Leave the output default in place so the loopback checks its wire value.
         await tester.runAsync(
           () => runtime.agent.saveContextOptions(
             const AgentContextOptions(
               inputTokens: 65536,
-              outputTokens: 2048,
               modelCalls: 8,
               toolCalls: 20,
               activeSeconds: 120,
