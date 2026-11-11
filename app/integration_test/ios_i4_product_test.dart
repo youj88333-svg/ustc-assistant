@@ -751,10 +751,15 @@ void main() {
           ),
         );
         await _frames(tester);
-        expect(
-          find.byKey(const ValueKey('calendar-week-horizontal-scroll')),
-          findsNothing,
+        final weekViewport = find.byKey(
+          const ValueKey('calendar-week-horizontal-scroll'),
         );
+        final weekScroll = tester.state<ScrollableState>(
+          find
+              .descendant(of: weekViewport, matching: find.byType(Scrollable))
+              .first,
+        );
+        expect(weekScroll.position.maxScrollExtent, 0);
         expect(
           find.byWidgetPredicate(
             (widget) =>
