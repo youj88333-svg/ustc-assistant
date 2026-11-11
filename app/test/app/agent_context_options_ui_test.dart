@@ -25,7 +25,7 @@ void main() {
             find.byKey(const ValueKey('agent-context-input-tokens')),
           )
           .initialValue,
-      16000,
+      AgentContextOptions.defaultInputTokens,
     );
     expect(
       tester
@@ -33,7 +33,7 @@ void main() {
             find.byKey(const ValueKey('agent-context-output-tokens')),
           )
           .initialValue,
-      '2048',
+      AgentContextOptions.defaultOutputTokens.toString(),
     );
     expect(
       tester
@@ -59,10 +59,17 @@ void main() {
           .initialValue,
       '300',
     );
-    expect(find.textContaining('配置值，模型容量未核验。'), findsOneWidget);
+    final contextHelp = find.textContaining('输入估算只是偏好');
+    await tester.ensureVisible(contextHelp);
+    await tester.pumpAndSettle();
+    expect(contextHelp, findsOneWidget);
+    expect(find.textContaining('85%'), findsOneWidget);
+    expect(find.textContaining('模型容量尚未核验'), findsOneWidget);
+    expect(find.textContaining('16,384 tokens'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('agent-context-input-tokens')));
     await tester.pumpAndSettle();
+    expect(find.text('128 Ki tokens'), findsWidgets);
     await tester.tap(find.text('32,000 tokens'));
     await tester.pumpAndSettle();
     await _enter(tester, 'agent-context-output-tokens', '1536');
@@ -88,11 +95,31 @@ void main() {
     addTearDown(port.dispose);
 
     await _openAdvancedBudget(tester, port);
-    await _enter(tester, 'agent-context-output-tokens', '8193');
+    await _enter(tester, 'agent-context-output-tokens', '32769');
     await _tap(tester, 'agent-context-options-save');
 
     expect(port.contextSaveCalls, 0);
     expect(find.textContaining('超出范围'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('accepts the configured output ceiling of 32768 tokens', (
+    tester,
+  ) async {
+    final port = _ContextOptionsPort();
+    addTearDown(port.dispose);
+
+    await _openAdvancedBudget(tester, port);
+    await _enter(tester, 'agent-context-output-tokens', '32768');
+    await _tap(tester, 'agent-context-options-save');
+
+    expect(port.contextSaveCalls, 1);
+    expect(port.savedOptions?.outputTokens, 32768);
+    expect(
+      find.byKey(const ValueKey('agent-context-options-error')),
+      findsNothing,
+    );
+    expect(find.text('上下文预算已保存。'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

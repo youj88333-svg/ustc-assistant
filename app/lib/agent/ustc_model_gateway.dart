@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../core/agent_contract.dart';
+import '../core/agent_text.dart';
 import 'model_gateway_contract.dart';
 import 'model_reasoning_policy.dart';
 
@@ -53,11 +54,15 @@ final class UstcModelGateway implements ModelGatewayPort {
   static final RegExp _modelIdPattern = RegExp(r'^[A-Za-z0-9._:/-]{1,128}$');
   static final RegExp _toolNamePattern = RegExp(r'^[A-Za-z0-9_.-]{1,64}$');
   static const int _modelsBodyLimit = 1024 * 1024;
-  static const int _streamBodyLimit = 2 * 1024 * 1024;
+  static const int _textRequestBodyLimit = 2 * 1024 * 1024;
+  static const int _imageRequestBodyLimit = 10 * 1024 * 1024;
+  static const int _minimumStreamBodyLimit = 2 * 1024 * 1024;
+  static const int _maximumStreamBodyLimit = 16 * 1024 * 1024;
+  static const int _streamBytesPerOutputToken = 512;
   static const int _sseLineLimit = 64 * 1024;
   static const int _sseEventLimit = 64 * 1024;
-  static const int _textLimit = 24000;
   static const int _reasoningLimit = 128 * 1024;
+  static const int _maximumPromptCharacters = 512 * 1024;
   static const int _toolArgumentsLimit = 16 * 1024;
 
   final Uri _baseUri;
@@ -293,7 +298,13 @@ final class UstcModelGateway implements ModelGatewayPort {
     if (mediaType != null && mediaType != 'text/event-stream') {
       throw const AgentFailure(AgentFailureCode.protocol);
     }
-    await _readSse(operation, response, modelRequest.tools, output);
+    await _readSse(
+      operation,
+      response,
+      modelRequest.tools,
+      modelRequest.maxTokens,
+      output,
+    );
   }
 
   static bool _isContextLimit(Object? value) {
@@ -448,7 +459,7 @@ final class UstcModelGateway implements ModelGatewayPort {
     final messages = <Map<String, Object?>>[];
     final pending = <String, String>{};
     final seenCallIds = <String>{};
-    var promptChars = 0;
+    var promptCharacters = 0;
     var imageCount = 0, imageBytes = 0;
     for (final message in request.messages) {
       if (message.images.isNotEmpty) {
@@ -475,8 +486,8 @@ final class UstcModelGateway implements ModelGatewayPort {
       }
       final content = message.content;
       if (content != null) {
-        promptChars += content.runes.length;
-        if (content.runes.length > 192 * 1024 || promptChars > 256 * 1024) {
+        promptCharacters += content.length;
+        if (promptCharacters > _maximumPromptCharacters) {
           throw const AgentFailure(AgentFailureCode.resourceLimit);
         }
       }
@@ -593,7 +604,7 @@ final class UstcModelGateway implements ModelGatewayPort {
     try {
       final encoded = utf8.encode(jsonEncode(body));
       if (encoded.length >
-          (imageCount > 0 ? 10 * 1024 * 1024 : _modelsBodyLimit)) {
+          (imageCount > 0 ? _imageRequestBodyLimit : _textRequestBodyLimit)) {
         throw const AgentFailure(AgentFailureCode.resourceLimit);
       }
       return encoded;
@@ -665,6 +676,7 @@ final class UstcModelGateway implements ModelGatewayPort {
     _OwnedRequest operation,
     HttpClientResponse response,
     List<ModelToolDefinition> allowedTools,
+    int maxTokens,
     StreamController<ModelEvent> output,
   ) async {
     var totalBytes = 0;
@@ -674,6 +686,7 @@ final class UstcModelGateway implements ModelGatewayPort {
     var finishReason = <String>{};
     var sawDone = false;
     int? inputTokens;
+    int? cachedInputTokens;
     int? outputTokens;
     ModelCompleted? pendingCompletion;
     var dataLines = <String>[];
@@ -705,6 +718,7 @@ final class UstcModelGateway implements ModelGatewayPort {
           finishReason: finishReason.single,
           toolCalls: completedCalls,
           inputTokens: inputTokens,
+          cachedInputTokens: cachedInputTokens,
           outputTokens: outputTokens,
         );
         sawDone = true;
@@ -728,6 +742,7 @@ final class UstcModelGateway implements ModelGatewayPort {
           throw const AgentFailure(AgentFailureCode.protocol);
         }
         inputTokens = _optionalUsage(usage, 'prompt_tokens');
+        cachedInputTokens = _optionalCachedInputTokens(usage, inputTokens);
         outputTokens = _optionalUsage(usage, 'completion_tokens');
       }
       final choicesValue = decoded['choices'];
@@ -782,20 +797,23 @@ final class UstcModelGateway implements ModelGatewayPort {
             ? reasoning
             : legacyReasoning as String?;
         if (reasoningText != null && reasoningText.isNotEmpty) {
-          reasoningCharacters += reasoningText.runes.length;
-          if (reasoningCharacters > _reasoningLimit) {
-            throw const AgentFailure(AgentFailureCode.resourceLimit);
+          final remaining = _reasoningLimit - reasoningCharacters;
+          if (remaining > 0) {
+            final visible = _prefixByCodeUnits(reasoningText, remaining);
+            if (visible.isNotEmpty) {
+              output.add(ModelReasoningDelta(visible));
+              reasoningCharacters += visible.length;
+            }
           }
-          output.add(ModelReasoningDelta(reasoningText));
         }
         final contentValue = deltaValue['content'];
         if (contentValue != null) {
           if (contentValue is! String) {
             throw const AgentFailure(AgentFailureCode.protocol);
           }
-          textCharacters += contentValue.runes.length;
-          if (textCharacters > _textLimit) {
-            throw const AgentFailure(AgentFailureCode.resourceLimit);
+          textCharacters += contentValue.length;
+          if (textCharacters > AgentText.maximumReplyCharacters) {
+            throw const AgentFailure(AgentFailureCode.responseLengthLimit);
           }
           if (contentValue.isNotEmpty) {
             output.add(ModelTextDelta(contentValue));
@@ -806,9 +824,9 @@ final class UstcModelGateway implements ModelGatewayPort {
           if (refusalValue is! String) {
             throw const AgentFailure(AgentFailureCode.protocol);
           }
-          textCharacters += refusalValue.runes.length;
-          if (textCharacters > _textLimit) {
-            throw const AgentFailure(AgentFailureCode.resourceLimit);
+          textCharacters += refusalValue.length;
+          if (textCharacters > AgentText.maximumReplyCharacters) {
+            throw const AgentFailure(AgentFailureCode.responseLengthLimit);
           }
           if (refusalValue.isNotEmpty) {
             output.add(ModelTextDelta(refusalValue));
@@ -866,7 +884,7 @@ final class UstcModelGateway implements ModelGatewayPort {
           throw operation.failure!;
         }
         totalBytes += chunk.length;
-        if (totalBytes > _streamBodyLimit) {
+        if (totalBytes > _streamBodyLimitFor(maxTokens)) {
           throw const AgentFailure(AgentFailureCode.resourceLimit);
         }
         for (final byte in chunk) {
@@ -905,6 +923,37 @@ final class UstcModelGateway implements ModelGatewayPort {
       throw const AgentFailure(AgentFailureCode.protocol);
     }
     return value;
+  }
+
+  int? _optionalCachedInputTokens(
+    Map<String, dynamic> usage,
+    int? inputTokens,
+  ) {
+    if (inputTokens == null) {
+      return null;
+    }
+    final value = usage['prompt_cache_hit_tokens'];
+    if (value is! int || value < 0 || value > inputTokens) {
+      return null;
+    }
+    return value;
+  }
+
+  static int _streamBodyLimitFor(int maxTokens) =>
+      (maxTokens * _streamBytesPerOutputToken)
+          .clamp(_minimumStreamBodyLimit, _maximumStreamBodyLimit)
+          .toInt();
+
+  static String _prefixByCodeUnits(String value, int maximum) {
+    if (value.length <= maximum) {
+      return value;
+    }
+    var end = maximum;
+    final lastCodeUnit = value.codeUnitAt(end - 1);
+    if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff) {
+      end--;
+    }
+    return value.substring(0, end);
   }
 
   bool _isFinishReason(String value) => const {
@@ -967,6 +1016,9 @@ final class UstcModelGateway implements ModelGatewayPort {
     Set<String> allowedNames,
     String finishReason,
   ) {
+    if (finishReason == 'length') {
+      return const <ModelToolCall>[];
+    }
     if (assemblies.isEmpty) {
       if (finishReason == 'tool_calls' || finishReason == 'function_call') {
         throw const AgentFailure(AgentFailureCode.protocol);

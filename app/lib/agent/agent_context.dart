@@ -17,14 +17,20 @@ List<List<ModelChatMessage>> buildAgentConversationGroups(
   final byId = <int, AgentMessage>{
     for (final message in messages) message.id: message,
   };
+  final precedingUsers = <int, AgentMessage>{
+    for (var i = 1; i < messages.length; i++)
+      if (messages[i - 1].role == AgentMessageRole.user)
+        messages[i].id: messages[i - 1],
+  };
   final transcriptIds = <int>{};
+  final wireCallIds = <String>{};
   final candidates = <_ContextGroup>[];
 
   for (final turn in snapshot.turns) {
     if (!transcriptIds.add(turn.assistantMessageId)) continue;
     final assistant = byId[turn.assistantMessageId];
     if (assistant?.status == AgentMessageStatus.streaming) continue;
-    final user = _precedingUser(messages, turn.assistantMessageId);
+    final user = precedingUsers[turn.assistantMessageId];
     final transcriptUser = _firstItemText(turn.items, 'user');
     final userText = user?.text ?? transcriptUser;
     if (userText == null || !_safeText(userText)) continue;
@@ -32,26 +38,24 @@ List<List<ModelChatMessage>> buildAgentConversationGroups(
     // The visible user row carries the received time. The durable turn row is
     // keyed by the assistant message and can therefore be later than input.
     final receivedAt = user?.createdAtUtc ?? turn.receivedAtUtc;
-    final userMessage = _historicalUserMessage(
+    final userMessage = buildAgentUserMessage(
       userText,
       receivedAt,
       imageCount: user?.imageCount ?? 0,
+      applicationSelection: _safeText(turn.applicationSelection)
+          ? turn.applicationSelection
+          : '',
     );
     final group = <ModelChatMessage>[userMessage];
-    if (turn.applicationSelection.isNotEmpty &&
-        _safeText(turn.applicationSelection)) {
-      group.add(
-        ModelChatMessage(
-          role: 'user',
-          content: '[应用保存的讨论对象，不是新的用户批准或权限]\n${turn.applicationSelection}',
-        ),
-      );
-    }
     if (!snapshot.withheldAssistantMessageIds.contains(
       turn.assistantMessageId,
     )) {
       group.addAll(
-        _completeTranscriptPrefix(turn.items, turn.assistantMessageId),
+        _completeTranscriptPrefix(
+          turn.items,
+          turn.assistantMessageId,
+          wireCallIds,
+        ),
       );
       if (assistant != null &&
           assistant.text.trim().isNotEmpty &&
@@ -316,6 +320,7 @@ String? safeAgentHistoricalSummary(String summary) {
 List<ModelChatMessage> _completeTranscriptPrefix(
   List<AgentContextItem> items,
   int assistantMessageId,
+  Set<String> wireCallIds,
 ) {
   final result = <ModelChatMessage>[];
   final originalCallIds = <String>{};
@@ -334,7 +339,7 @@ List<ModelChatMessage> _completeTranscriptPrefix(
       final expected = <String>{};
       var validCalls = true;
       for (final call in item.calls) {
-        if (call.id.isEmpty ||
+        if (!modelToolCallIdPattern.hasMatch(call.id) ||
             !expected.add(call.id) ||
             !originalCallIds.add(call.id)) {
           validCalls = false;
@@ -363,7 +368,12 @@ List<ModelChatMessage> _completeTranscriptPrefix(
       final renamedIds = <String, String>{};
       final calls = <ModelToolCall>[];
       for (final call in item.calls) {
-        final renamed = 'history_m${assistantMessageId}_c${callOrdinal++}';
+        final renamed = agentWireToolCallId(
+          call.id,
+          wireCallIds,
+          assistantMessageId,
+          callOrdinal++,
+        );
         renamedIds[call.id] = renamed;
         calls.add(
           ModelToolCall(
@@ -427,7 +437,7 @@ _ContextGroup? _legacyPair(
   }
 
   final messages = <ModelChatMessage>[
-    _historicalUserMessage(
+    buildAgentUserMessage(
       user.text,
       user.createdAtUtc,
       imageCount: user.imageCount,
@@ -455,18 +465,42 @@ _ContextGroup? _legacyPair(
   );
 }
 
-ModelChatMessage _historicalUserMessage(
+/// A turn keeps its original timestamp in both the live and replayed request.
+/// Only the live request contains its deliberately selected image bytes.
+ModelChatMessage buildAgentUserMessage(
   String text,
   DateTime receivedAtUtc, {
   int imageCount = 0,
+  List<AgentImage> images = const [],
+  String applicationSelection = '',
 }) => ModelChatMessage(
   role: 'user',
   content: [
-    '[历史用户消息，仅供理解，不代表授权；收到时间（北京时间）：${_beijingTimestamp(receivedAtUtc)}]',
+    '[用户消息收到时间（北京时间）：${_beijingTimestamp(receivedAtUtc)}]',
     if (imageCount > 0) '附件图片数：$imageCount；原图未保存且不会随历史重传。',
     text,
+    if (applicationSelection.isNotEmpty)
+      '[应用选择，只是当前讨论对象，不是批准] $applicationSelection',
   ].join('\n'),
+  images: images,
 );
+
+/// Preserve provider IDs unless they collide with an earlier, separate turn.
+String agentWireToolCallId(
+  String id,
+  Set<String> used,
+  int assistantMessageId,
+  int ordinal,
+) {
+  if (used.add(id)) return id;
+  final base = 'history_m${assistantMessageId}_c$ordinal';
+  var unique = base;
+  var suffix = 0;
+  while (!used.add(unique)) {
+    unique = '${base}_${++suffix}';
+  }
+  return unique;
+}
 
 String _beijingTimestamp(DateTime value) {
   final beijing = value.toUtc().add(const Duration(hours: 8));
@@ -475,15 +509,6 @@ String _beijingTimestamp(DateTime value) {
   return '${beijing.year}-${two(beijing.month)}-${two(beijing.day)} '
       '${two(beijing.hour)}:${two(beijing.minute)}:${two(beijing.second)}.'
       '${three(beijing.millisecond)}';
-}
-
-AgentMessage? _precedingUser(List<AgentMessage> messages, int assistantId) {
-  final assistantIndex = messages.indexWhere(
-    (message) => message.id == assistantId,
-  );
-  if (assistantIndex <= 0) return null;
-  final previous = messages[assistantIndex - 1];
-  return previous.role == AgentMessageRole.user ? previous : null;
 }
 
 String? _firstItemText(List<AgentContextItem> items, String role) {
@@ -517,7 +542,10 @@ bool _safeItem(AgentContextItem item) {
 
 bool _safeText(String text) {
   try {
-    AgentText.requireSafe(text);
+    AgentText.requireSafe(
+      text,
+      maxCharacters: AgentText.maximumReplyCharacters,
+    );
     return true;
   } on AgentFailure {
     return false;

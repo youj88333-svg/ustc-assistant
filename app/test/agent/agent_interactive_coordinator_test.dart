@@ -599,7 +599,8 @@ void main() {
         expect(
           replacementRequest.messages.any(
             (message) =>
-                message.role == 'user' && message.content == '改成刷新下个月的二课范围',
+                message.role == 'user' &&
+                (message.content ?? '').endsWith('\n改成刷新下个月的二课范围'),
           ),
           isTrue,
         );
@@ -931,7 +932,9 @@ void main() {
         expect(retry.toolChoice, isNull);
         expect(
           retry.messages.any(
-            (message) => message.role == 'user' && message.content == question,
+            (message) =>
+                message.role == 'user' &&
+                (message.content ?? '').endsWith('\n$question'),
           ),
           isTrue,
         );
@@ -1095,7 +1098,7 @@ void main() {
         expect(request.messages.last.role, 'user');
         expect(
           request.messages.last.content,
-          '这个任务如何安排？\n[应用选择，只是当前讨论对象，不是批准] 已核验的合成任务摘要',
+          endsWith('\n这个任务如何安排？\n[应用选择，只是当前讨论对象，不是批准] 已核验的合成任务摘要'),
         );
         final persisted = await rig.store.agent.messages(conversation);
         expect(
@@ -1190,7 +1193,7 @@ void main() {
         expect(rig.tools.discussionSelections, hasLength(2));
         expect(
           rig.gateway.generations.single.request.messages.last.content,
-          '只查公开资料，不读我的任务\n[应用选择，只是当前讨论对象，不是批准] 本地选择摘要',
+          endsWith('\n只查公开资料，不读我的任务\n[应用选择，只是当前讨论对象，不是批准] 本地选择摘要'),
         );
         expect(
           rig.gateway.generations.single.request.tools

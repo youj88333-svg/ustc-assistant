@@ -74,6 +74,89 @@ void main() {
     }
   });
 
+  testWidgets(
+    'I4 compact phone week shows seven days and an evening course without vertical scrolling',
+    (tester) async {
+      tester.view.physicalSize = const Size(393, 600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() async {
+        await tester.pumpWidget(const SizedBox.shrink());
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      final fixture = _fixture(includeEvening: true);
+      CalendarOccurrence? selected;
+      await _pumpWeek(
+        tester,
+        fixture,
+        width: 393,
+        height: 600,
+        textScale: 1,
+        compactPresentation: true,
+        onSelect: (value) => selected = value,
+      );
+
+      final horizontalViewport = find.byKey(
+        const ValueKey('calendar-week-horizontal-scroll'),
+      );
+      final horizontalScrollable = tester.state<ScrollableState>(
+        find
+            .descendant(
+              of: horizontalViewport,
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      expect(horizontalScrollable.position.maxScrollExtent, 0);
+      for (var offset = 0; offset < 7; offset++) {
+        final day = DateTime.utc(2026, 10, 12 + offset);
+        expect(
+          find.byKey(ValueKey('calendar-week-heading-${_dayKey(day)}')),
+          findsOneWidget,
+        );
+      }
+
+      final timeViewport = find.byKey(
+        const ValueKey('calendar-week-time-scroll'),
+      );
+      final timeScrollable = tester.state<ScrollableState>(
+        find
+            .descendant(of: timeViewport, matching: find.byType(Scrollable))
+            .first,
+      );
+      expect(timeScrollable.position.maxScrollExtent, 0);
+      final eveningTile = find.byKey(
+        ValueKey<CalendarReference>(fixture.eveningCourse!.reference),
+      );
+      expect(eveningTile, findsOneWidget);
+      expect(eveningTile.hitTestable(), findsOneWidget);
+      expect(
+        tester.getRect(eveningTile).bottom,
+        lessThanOrEqualTo(tester.getRect(timeViewport).bottom),
+      );
+      await tester.tap(eveningTile);
+      expect(selected, same(fixture.eveningCourse));
+      expect(tester.takeException(), isNull);
+
+      await _pumpWeek(
+        tester,
+        fixture,
+        width: 393,
+        height: 500,
+        textScale: 2,
+        compactPresentation: true,
+      );
+      final largeTextScroll = tester.state<ScrollableState>(
+        find
+            .descendant(of: timeViewport, matching: find.byType(Scrollable))
+            .first,
+      );
+      expect(largeTextScroll.position.maxScrollExtent, greaterThan(0));
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('narrow week keeps date, event, conflict, and task actions open', (
     tester,
   ) async {
@@ -215,20 +298,22 @@ Future<void> _pumpWeek(
   WidgetTester tester,
   _Fixture fixture, {
   required double width,
+  double height = 700,
   required double textScale,
+  bool compactPresentation = false,
   ValueChanged<CalendarOccurrence>? onSelect,
   void Function(String heading, List<CalendarOccurrence> occurrences)?
   onOverflow,
   ValueChanged<TaskRecord>? onSelectTask,
   void Function(DateTime day, List<TaskRecord> tasks)? onTaskOverflow,
 }) async {
-  tester.view.physicalSize = Size(width, 700);
+  tester.view.physicalSize = Size(width, height);
   tester.view.devicePixelRatio = 1;
   await tester.pumpWidget(
     MaterialApp(
       home: MediaQuery(
         data: MediaQueryData(
-          size: Size(width, 700),
+          size: Size(width, height),
           textScaler: TextScaler.linear(textScale),
         ),
         child: Scaffold(
@@ -237,6 +322,7 @@ Future<void> _pumpWeek(
             today: DateTime.utc(2026, 10, 14),
             tasks: fixture.tasks,
             nowUtc: DateTime.utc(2026, 10, 15, 1),
+            compactPresentation: compactPresentation,
             onSelect: onSelect ?? (_) {},
             onOverflow: onOverflow ?? (_, _) {},
             onSelectTask: onSelectTask ?? (_) {},
@@ -250,7 +336,7 @@ Future<void> _pumpWeek(
   await tester.pumpAndSettle();
 }
 
-_Fixture _fixture() {
+_Fixture _fixture({bool includeEvening = false}) {
   final allDay = _occurrence(
     id: 1,
     kind: CalendarKind.personal,
@@ -290,12 +376,21 @@ _Fixture _fixture() {
     endsAtUtc: DateTime.utc(2026, 10, 14, 2),
     location: '图书馆',
   );
+  final eveningCourse = _occurrence(
+    id: 6,
+    kind: CalendarKind.course,
+    title: '晚间课程',
+    startsAtUtc: DateTime.utc(2026, 10, 12, 11, 30),
+    endsAtUtc: DateTime.utc(2026, 10, 12, 12, 15),
+  );
   final segments = [
     _segment(allDay, DateTime.utc(2026, 10, 12), 0, 1440),
     _segment(secondAllDay, DateTime.utc(2026, 10, 12), 0, 1440),
     _segment(earlyMorning, DateTime.utc(2026, 10, 13), 120, 150),
     _segment(course, DateTime.utc(2026, 10, 14), 540, 600),
     _segment(overlappingPersonal, DateTime.utc(2026, 10, 14), 540, 600),
+    if (includeEvening)
+      _segment(eveningCourse, DateTime.utc(2026, 10, 12), 1170, 1215),
   ];
   final tasks = [
     _task(1, '今天要交的任务', DateTime.utc(2026, 10, 15, 3)),
@@ -309,10 +404,17 @@ _Fixture _fixture() {
       firstDay: DateTime.utc(2026, 10, 12),
       endDayExclusive: DateTime.utc(2026, 10, 19),
     ),
-    items: [allDay, secondAllDay, earlyMorning, course, overlappingPersonal],
+    items: [
+      allDay,
+      secondAllDay,
+      earlyMorning,
+      course,
+      overlappingPersonal,
+      if (includeEvening) eveningCourse,
+    ],
     segments: segments,
     conflicts: [CalendarConflict(course, overlappingPersonal)],
-    matched: 5,
+    matched: includeEvening ? 6 : 5,
     truncated: false,
     conflictsTruncated: false,
   );
@@ -324,6 +426,7 @@ _Fixture _fixture() {
     course: course,
     overlappingPersonal: overlappingPersonal,
     tasks: tasks,
+    eveningCourse: includeEvening ? eveningCourse : null,
     dueToday: tasks[0],
     overdue: tasks[1],
     singleTask: tasks[2],
@@ -392,6 +495,7 @@ final class _Fixture {
     required this.course,
     required this.overlappingPersonal,
     required this.tasks,
+    this.eveningCourse,
     required this.dueToday,
     required this.overdue,
     required this.singleTask,
@@ -404,6 +508,7 @@ final class _Fixture {
   final CalendarOccurrence course;
   final CalendarOccurrence overlappingPersonal;
   final List<TaskRecord> tasks;
+  final CalendarOccurrence? eveningCourse;
   final TaskRecord dueToday;
   final TaskRecord overdue;
   final TaskRecord singleTask;

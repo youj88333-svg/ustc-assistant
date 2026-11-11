@@ -64,12 +64,17 @@ final class AgentUsePolicySnapshot {
 /// User configuration is an estimate, not verified provider capacity.
 final class AgentContextOptions {
   const AgentContextOptions({
-    this.inputTokens = 16000,
-    this.outputTokens = 2048,
+    this.inputTokens = defaultInputTokens,
+    this.outputTokens = defaultOutputTokens,
     this.modelCalls = 16,
     this.toolCalls = 48,
     this.activeSeconds = 300,
   });
+  static const defaultInputTokens = 128 * 1024;
+  static const defaultOutputTokens = 16384;
+  static const maximumInputTokens = 128 * 1024;
+  static const maximumOutputTokens = 32768;
+
   final int inputTokens, outputTokens, modelCalls, toolCalls, activeSeconds;
   List<int> get canonical => [
     inputTokens,
@@ -80,9 +85,9 @@ final class AgentContextOptions {
   ];
   void validate() {
     if (inputTokens < 4096 ||
-        inputTokens > 65536 ||
+        inputTokens > maximumInputTokens ||
         outputTokens < 1 ||
-        outputTokens > 8192 ||
+        outputTokens > maximumOutputTokens ||
         modelCalls < 1 ||
         modelCalls > 64 ||
         toolCalls < 1 ||

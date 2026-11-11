@@ -121,7 +121,8 @@ void main() {
 
         expect(find.byType(OnboardingPage), findsNothing);
         expect(find.byType(AgentWorkspacePage), findsOneWidget);
-        expect(find.byKey(const ValueKey('agent-page-title')), findsOneWidget);
+        expect(find.byKey(const ValueKey('agent-page-title')), findsNothing);
+        expect(find.text('USTC Assistant'), findsNothing);
         expect(
           find.byKey(const ValueKey('shell-phone-navigation')),
           findsOneWidget,
@@ -136,18 +137,7 @@ void main() {
           runtime.agent.view.conversationId,
         );
 
-        final topBarLogs = find.descendant(
-          of: find.byType(AppBar),
-          matching: find.byType(DiagnosticsExportButton),
-        );
-        expect(topBarLogs, findsOneWidget);
-        expect(
-          identical(
-            tester.widget<DiagnosticsExportButton>(topBarLogs).diagnostics,
-            openedBootstrap.diagnostics,
-          ),
-          isTrue,
-        );
+        expect(find.byType(DiagnosticsExportButton), findsNothing);
 
         // A larger 393-point viewport with 2x text and a keyboard-sized inset
         // keeps the real product composer usable without exercising a model.
@@ -172,11 +162,17 @@ void main() {
           find.byKey(const ValueKey('shell-phone-navigation')),
           findsNothing,
         );
+        expect(find.byKey(const ValueKey('shell-nav-settings')), findsNothing);
+        expect(find.byKey(const ValueKey('agent-settings-open')), findsNothing);
         expect(find.byType(Drawer), findsNothing);
         expect(tester.takeException(), isNull);
         tester.view.resetViewInsets();
         FocusManager.instance.primaryFocus?.unfocus();
         await _pumpFrames(tester);
+        expect(
+          find.byKey(const ValueKey('shell-nav-settings')),
+          findsOneWidget,
+        );
 
         // The phone has Agent and agenda destinations; task work remains a
         // section within agenda instead of becoming a third navigation root.
@@ -203,6 +199,15 @@ void main() {
         // existing per-category permission section are local reads only.
         await tester.tap(find.byKey(const ValueKey('shell-nav-settings')));
         await _pumpFrames(tester);
+        final logExport = find.byType(DiagnosticsExportButton).first;
+        expect(logExport, findsOneWidget);
+        expect(
+          identical(
+            tester.widget<DiagnosticsExportButton>(logExport).diagnostics,
+            openedBootstrap.diagnostics,
+          ),
+          isTrue,
+        );
         final modelSection = find.byKey(
           const ValueKey('settings-section-agent'),
         );

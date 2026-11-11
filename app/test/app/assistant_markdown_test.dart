@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/app/assistant_markdown.dart';
 import 'package:ustc_assistant_m0/app/product_app.dart';
@@ -64,4 +65,57 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('streaming prose is bounded plain text, not reparsed Markdown', (
+    tester,
+  ) async {
+    final streamed = '${'正文。' * 3000}**仍在生成**\n\n流式末尾';
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: productTheme,
+        home: Scaffold(
+          body: AssistantMarkdown(data: streamed, streaming: true),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final visible = tester.widget<Text>(
+      find.byKey(const ValueKey('assistant-streaming-text')),
+    );
+    expect(visible.data!.length, lessThan(4200));
+    expect(visible.data, contains('流式末尾'));
+    expect(visible.data, contains('**仍在生成**'));
+    expect(find.byType(MarkdownBody), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('long completed prose keeps the whole reply available', (
+    tester,
+  ) async {
+    const ending = '完整答案尾部仍可查看。';
+    final content = '${'正文。' * 4001}\n\n$ending';
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: productTheme,
+        home: Scaffold(
+          body: SingleChildScrollView(child: AssistantMarkdown(data: content)),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(MarkdownBody), findsOneWidget);
+    expect(find.text('显示完整回复'), findsOneWidget);
+    expect(find.textContaining(ending, findRichText: true), findsNothing);
+    final expand = find.byKey(const ValueKey('assistant-markdown-expand'));
+    await tester.ensureVisible(expand);
+    await tester.tap(expand);
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.textContaining(ending, findRichText: true));
+
+    expect(find.textContaining(ending, findRichText: true), findsOneWidget);
+    expect(find.text('收起长回复'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 }

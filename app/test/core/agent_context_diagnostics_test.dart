@@ -132,7 +132,7 @@ void main() {
         {'estimatedInputTokens': -1},
         {'estimatedInputTokens': 1000001},
         {'outputReserve': 0},
-        {'outputReserve': 8193},
+        {'outputReserve': 32769},
         {'availableTools': -1},
         {'availableTools': 21},
         {'wholeGroupsRemoved': -1},
@@ -153,7 +153,7 @@ void main() {
         throwsA(isA<FormatException>()),
       );
       expect(
-        () => const DiagnosticContextMetadata(outputReserve: 8193).toSafeMap(),
+        () => const DiagnosticContextMetadata(outputReserve: 32769).toSafeMap(),
         throwsA(isA<FormatException>()),
       );
       expect(

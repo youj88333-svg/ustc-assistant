@@ -77,16 +77,14 @@ void main() {
 
     test('compacts at its soft threshold', () {
       final budget = AgentContextBudget();
-      final small = budget.estimateMessages([
-        ModelChatMessage(role: 'user', content: '继续'),
-      ], const []);
-      final large = budget.estimateMessages([
-        ModelChatMessage(role: 'user', content: List.filled(42000, 'a').join()),
-      ], const []);
-
-      expect(budget.shouldCompact(small), isFalse);
-      expect(large.estimatedInputTokens, greaterThan(12000));
-      expect(budget.shouldCompact(large), isTrue);
+      final threshold = (budget.maximumInputTokens * .85).ceil();
+      AgentContextEstimate estimate(int tokens) => AgentContextEstimate(
+        textTokens: tokens,
+        imageCount: 0,
+        estimatedImageTokens: 0,
+      );
+      expect(budget.shouldCompact(estimate(threshold - 1)), isFalse);
+      expect(budget.shouldCompact(estimate(threshold)), isTrue);
     });
 
     test(
@@ -216,7 +214,7 @@ void main() {
         throwsArgumentError,
       );
       expect(
-        () => AgentContextBudget(maximumInputTokens: 65537),
+        () => AgentContextBudget(maximumInputTokens: 131073),
         throwsArgumentError,
       );
       expect(
@@ -224,7 +222,7 @@ void main() {
         throwsArgumentError,
       );
       expect(
-        () => AgentContextBudget(maximumOutputTokens: 8193),
+        () => AgentContextBudget(maximumOutputTokens: 32769),
         throwsArgumentError,
       );
       expect(

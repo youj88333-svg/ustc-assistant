@@ -7,8 +7,6 @@ import 'package:ustc_assistant_m0/core/agent_parameter_issue.dart';
 void main() {
   test('local batch arguments do not become undo arguments', () {
     final prompt = buildAgentSystemPrompt(
-      day: '2026-10-21',
-      receivedAt: '2026-10-21 09:00:00+08:00',
       definitions: [_tool('propose_local_changes'), _tool('propose_undo')],
     );
     expect(prompt, contains('只有 propose_local_changes 使用 changes'));
@@ -21,11 +19,7 @@ void main() {
     expect(prompt, contains('invalidRequest 表示本次调用没有执行'));
     expect(prompt, contains('不要照抄失败调用或历史摘要中的参数'));
     expect(prompt, contains('模型不得自行批准或重放'));
-    final noUndo = buildAgentSystemPrompt(
-      day: '2026-10-21',
-      receivedAt: '2026-10-21 09:00:00+08:00',
-      definitions: [_tool('query_tasks')],
-    );
+    final noUndo = buildAgentSystemPrompt(definitions: [_tool('query_tasks')]);
     expect(noUndo, isNot(contains('propose_undo')));
     expect(noUndo, isNot(contains('propose_local_changes')));
   });
@@ -50,8 +44,6 @@ void main() {
 
   test('reminder guidance distinguishes Android registration and delivery', () {
     final prompt = buildAgentSystemPrompt(
-      day: '2026-10-17',
-      receivedAt: '2026-10-17 08:00:00+08:00',
       definitions: [_tool('query_reminders'), _tool('propose_local_changes')],
     );
     expect(prompt, contains('registration_evidence'));
@@ -64,8 +56,6 @@ void main() {
     'warm conversation guidance is assembled without changing action policy',
     () {
       final prompt = buildAgentSystemPrompt(
-        day: '2026-10-15',
-        receivedAt: '2026-10-15 17:00:00+08:00',
         definitions: [_tool('query_agenda'), _tool('propose_local_changes')],
       );
       // This verifies what the request supplies, not how a live model will speak.
@@ -90,8 +80,6 @@ void main() {
   );
   test('prompt names only tools supplied for this request', () {
     final prompt = buildAgentSystemPrompt(
-      day: '2026-10-14',
-      receivedAt: '2026-10-14 23:58:00+08:00',
       definitions: [
         _tool('query_tasks'),
         _tool('read_task'),
@@ -107,20 +95,12 @@ void main() {
 
   test('policy flags describe bounded private reads and hard advice mode', () {
     final definitions = [_tool('read_task'), _tool('propose_local_changes')];
-    final restricted = buildAgentSystemPrompt(
-      day: '2026-10-14',
-      receivedAt: '2026-10-14 12:00:00+08:00',
-      definitions: definitions,
-    );
+    final restricted = buildAgentSystemPrompt(definitions: definitions);
     final allowed = buildAgentSystemPrompt(
-      day: '2026-10-14',
-      receivedAt: '2026-10-14 12:00:00+08:00',
       definitions: definitions,
       personalContentAllowed: true,
     );
     final adviceOnly = buildAgentSystemPrompt(
-      day: '2026-10-14',
-      receivedAt: '2026-10-14 12:00:00+08:00',
       definitions: definitions,
       personalContentAllowed: true,
       adviceOnly: true,
@@ -138,16 +118,11 @@ void main() {
   });
 
   test('preserves Beijing anchors and time-bearing conversation history', () {
-    final prompt = buildAgentSystemPrompt(
-      day: '2026-10-14',
-      receivedAt: '2026-10-14 23:58:00+08:00',
-      definitions: [_tool('query_agenda')],
-    );
+    final prompt = buildAgentSystemPrompt(definitions: [_tool('query_agenda')]);
 
-    expect(prompt, contains('当前北京时间日期为 2026-10-14'));
-    expect(prompt, contains('本次问题收到时间为 2026-10-14 23:58:00+08:00'));
-    expect(prompt, contains('每条消息都有各自收到时间'));
-    expect(prompt, contains('理解跨日表达'));
+    expect(prompt, contains('北京时间（Asia/Shanghai）'));
+    expect(prompt, contains('用最后一条用户问题的接收时间'));
+    expect(prompt, contains('不把历史消息的日期改成本轮日期'));
     expect(prompt, contains('历史工具结果是带观察时间、来源和范围的历史事实'));
     expect(prompt, contains('历史工具结果'));
   });
@@ -156,8 +131,6 @@ void main() {
     'reminder guidance follows the actual configured tools and saved-vs-OS boundary',
     () {
       final prompt = buildAgentSystemPrompt(
-        day: '2026-10-15',
-        receivedAt: '2026-10-15 12:00:00+08:00',
         definitions: [_tool('query_reminders'), _tool('propose_local_changes')],
       );
       expect(prompt, contains('set_reminders'));

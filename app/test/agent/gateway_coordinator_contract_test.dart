@@ -62,11 +62,7 @@ void main() {
       );
       try {
         expect(tools.definitions.map((d) => d.name).toSet(), hasLength(20));
-        final prompt = buildAgentSystemPrompt(
-          day: '2026-10-15',
-          receivedAt: '2026-10-15 08:00:00+08:00',
-          definitions: tools.definitions,
-        );
+        final prompt = buildAgentSystemPrompt(definitions: tools.definitions);
         final budget = AgentContextBudget();
         final estimated = budget.estimateMessages([
           ModelChatMessage(role: 'system', content: prompt),

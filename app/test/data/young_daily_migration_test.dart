@@ -272,7 +272,8 @@ Map<String, Object?> _snapshot(File file) {
               : table['sql'],
           'rows': [
             for (final row in raw.select(
-              'SELECT * FROM "${table['name']}" ORDER BY rowid',
+              'SELECT * FROM "${table['name']}" '
+              "ORDER BY ${table['name'] == 'sqlite_sequence' ? 'name' : 'rowid'}",
             ))
               {
                 for (final entry in row.entries)

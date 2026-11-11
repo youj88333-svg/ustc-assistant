@@ -46,6 +46,7 @@ import 'core/reminder_contract.dart';
 import 'app/m6_settings_panel.dart';
 import 'app/onboarding_controller.dart';
 import 'app/onboarding_page.dart';
+import 'app/workspace_visibility.dart';
 
 // This temporary panel is absent from normal product navigation.
 const m3ValidationEnabled =
@@ -472,9 +473,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
           widget.enableOnboarding && (_onboarding?.showSetup ?? true);
       return ProductApp(
         scaffoldMessengerKey: _messengerKey,
-        logsActionBuilder: defaultTargetPlatform == TargetPlatform.iOS
-            ? (_) => DiagnosticsExportButton(diagnostics: runtime.diagnostics)
-            : null,
+        compactPhoneChrome: defaultTargetPlatform == TargetPlatform.iOS,
         key: ValueKey(
           'product-${view.snapshot?.context.resetEpoch}-$showOnboarding',
         ),
@@ -502,6 +501,11 @@ final class _OwnedAppState extends State<OwnedApplication> {
         },
         agentBuilder: (context) => AgentWorkspacePage(
           controller: runtime.agent,
+          onOpenSettings: _phoneSettingsAction(context),
+          // Read the inset before Scaffold consumes it while resizing the body.
+          phoneKeyboardOpen:
+              defaultTargetPlatform == TargetPlatform.iOS &&
+              MediaQuery.viewInsetsOf(context).bottom > 0,
           diagnostics: runtime.diagnostics,
           speechInput: defaultTargetPlatform == TargetPlatform.iOS
               ? null
@@ -586,6 +590,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
         agendaBuilder: (context) => CalendarWorkspacePage(
           key: ValueKey(view.snapshot?.context.agendaEpoch),
           controller: runtime.calendar,
+          onOpenSettings: _phoneSettingsAction(context),
           tasks: runtime.calendar,
           reminders: runtime.jwStore.features,
           onViewModeSelected: (mode) async {
@@ -662,6 +667,11 @@ final class _OwnedAppState extends State<OwnedApplication> {
   );
 
   DemoRuntime get _runtime => widget.bootstrap.runtime!;
+
+  VoidCallback? _phoneSettingsAction(BuildContext context) =>
+      defaultTargetPlatform == TargetPlatform.iOS && isPhoneWorkspace(context)
+      ? () => _destination.value = ShellDestination.settings
+      : null;
 
   bool _isSafeHttpsSource(Uri uri) =>
       uri.scheme.toLowerCase() == 'https' &&

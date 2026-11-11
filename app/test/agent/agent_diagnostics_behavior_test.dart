@@ -551,7 +551,7 @@ void main() {
         rig.gateway.enqueueEvents(_answer('你好。'));
         await rig.coordinator.send('你好');
         final request = rig.gateway.generations.last.request;
-        expect(request.messages.last.content, '你好');
+        expect(request.messages.last.content, endsWith('\n你好'));
         expect(
           request.messages.map((message) => message.content ?? '').join('\n'),
           contains('此前普通问题'),

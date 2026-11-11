@@ -2487,6 +2487,7 @@ AgentToolResult _agentFailureResult(AgentFailure failure) {
     AgentFailureCode.ownershipLost => ('stale', 'staleReference'),
     AgentFailureCode.resourceLimit ||
     AgentFailureCode.contextLimit ||
+    AgentFailureCode.responseLengthLimit ||
     AgentFailureCode.rateLimited => ('resourceLimit', 'resourceLimit'),
     AgentFailureCode.cancelled => ('cancelled', 'cancelled'),
     AgentFailureCode.closed ||

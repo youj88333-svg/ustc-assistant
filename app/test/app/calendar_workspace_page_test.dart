@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:ustc_assistant_m0/app/calendar_week_view.dart';
 import 'package:ustc_assistant_m0/app/calendar_workspace_contract.dart';
 import 'package:ustc_assistant_m0/app/calendar_workspace_page.dart';
 import 'package:ustc_assistant_m0/app/task_workspace_contract.dart';
@@ -1650,6 +1651,154 @@ void main() {
   });
 
   testWidgets(
+    'I4 compact calendar chrome exposes settings and a small date picker',
+    (tester) async {
+      await _setSize(tester, const Size(393, 852));
+      final evening = _occurrence(
+        kind: CalendarKind.course,
+        id: 999,
+        title: '晚间课程',
+        startsAtUtc: DateTime.utc(2026, 10, 12, 11, 30),
+        endsAtUtc: DateTime.utc(2026, 10, 12, 12, 15),
+      );
+      final port = _FakeCalendarWorkspacePort(occurrences: [evening]);
+      addTearDown(port.dispose);
+      var settingsOpened = false;
+
+      await tester.pumpWidget(
+        _host(port, onOpenSettings: () => settingsOpened = true),
+      );
+      await tester.pumpAndSettle();
+
+      final settings = find.byKey(const ValueKey('shell-nav-settings'));
+      expect(settings, findsOneWidget);
+      expect(find.byTooltip('设置'), findsOneWidget);
+      expect(tester.getSize(settings).width, greaterThanOrEqualTo(48));
+      final settingsRect = tester.getRect(settings);
+      final tasksTabRect = tester.getRect(
+        find.byKey(const ValueKey('calendar-workspace-tab-tasks')),
+      );
+      expect(settingsRect.left, greaterThanOrEqualTo(tasksTabRect.right - 1));
+      expect(
+        (settingsRect.center.dy - tasksTabRect.center.dy).abs(),
+        lessThan(4),
+      );
+      await tester.tap(settings);
+      expect(settingsOpened, isTrue);
+
+      expect(
+        find.byKey(const ValueKey('calendar-workspace-compact-controls')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<CalendarWeekView>(find.byType(CalendarWeekView))
+            .compactPresentation,
+        isTrue,
+      );
+      expect(find.text('10-12 – 10-18'), findsNothing);
+      for (final key in const [
+        'calendar-workspace-prev',
+        'calendar-workspace-date-picker',
+        'calendar-workspace-next',
+        'calendar-workspace-view-mode',
+        'calendar-workspace-today',
+        'calendar-workspace-filter',
+        'calendar-personal-create',
+      ]) {
+        final control = find.byKey(ValueKey(key));
+        expect(control, findsOneWidget, reason: key);
+        expect(
+          tester.getSize(control).height,
+          greaterThanOrEqualTo(44),
+          reason: '$key size ${tester.getSize(control)}',
+        );
+        expect(control.hitTestable(), findsOneWidget, reason: key);
+      }
+      final compactControlRects = [
+        'calendar-workspace-prev',
+        'calendar-workspace-date-picker',
+        'calendar-workspace-next',
+        'calendar-workspace-view-mode',
+        'calendar-workspace-today',
+        'calendar-workspace-filter',
+        'calendar-personal-create',
+      ].map((key) => tester.getRect(find.byKey(ValueKey(key)))).toList();
+      expect(
+        compactControlRects.every(
+          (rect) =>
+              (rect.center.dy - compactControlRects.first.center.dy).abs() < 1,
+        ),
+        isTrue,
+        reason:
+            'the standard iPhone width fits calendar tools on one row: $compactControlRects',
+      );
+
+      final picker = find.byKey(
+        const ValueKey('calendar-workspace-date-picker'),
+      );
+      expect(find.byTooltip('选择日期 · 10-12 – 10-18'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: picker,
+          matching: find.byIcon(Icons.calendar_month_outlined),
+        ),
+        findsOneWidget,
+      );
+      await tester.tap(picker);
+      await tester.pumpAndSettle();
+      expect(find.byType(DatePickerDialog), findsOneWidget);
+      await tester.tap(find.text('14').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+      expect(port.view.day, DateTime.utc(2026, 10, 14));
+      expect(
+        find.byKey(const ValueKey('calendar-week-horizontal-scroll')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'I4 compact controls wrap safely at large text and narrow width',
+    (tester) async {
+      await _setSize(tester, const Size(320, 640));
+      final port = _FakeCalendarWorkspacePort();
+      addTearDown(port.dispose);
+
+      await tester.pumpWidget(_host(port, textScale: 2, onOpenSettings: () {}));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('calendar-workspace-compact-controls')),
+        findsOneWidget,
+      );
+      for (final key in const [
+        'shell-nav-settings',
+        'calendar-workspace-prev',
+        'calendar-workspace-date-picker',
+        'calendar-workspace-next',
+        'calendar-workspace-view-mode',
+        'calendar-workspace-today',
+        'calendar-workspace-filter',
+        'calendar-personal-create',
+      ]) {
+        final control = find.byKey(ValueKey(key));
+        expect(control, findsOneWidget, reason: key);
+        expect(
+          tester.getSize(control).height,
+          greaterThanOrEqualTo(44),
+          reason: '$key size ${tester.getSize(control)}',
+        );
+        expect(control.hitTestable(), findsOneWidget, reason: key);
+      }
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
     'mobile filter menu keeps undo reachable and preserves filter selection',
     (tester) async {
       await _setSize(tester, const Size(375, 812));
@@ -2010,6 +2159,7 @@ Widget _host(
   Key? captureBoundaryKey,
   String? fontFamily,
   Future<void> Function(CalendarViewMode mode)? onViewModeSelected,
+  VoidCallback? onOpenSettings,
 }) => MaterialApp(
   theme: ThemeData(
     useMaterial3: true,
@@ -2023,6 +2173,7 @@ Widget _host(
         tasks: tasks,
         calendarTaskNowUtc: calendarTaskNowUtc,
         onViewModeSelected: onViewModeSelected,
+        onOpenSettings: onOpenSettings,
       );
       return MediaQuery(
         data: MediaQuery.of(

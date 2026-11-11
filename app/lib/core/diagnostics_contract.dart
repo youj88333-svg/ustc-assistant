@@ -166,6 +166,7 @@ enum DiagnosticCode {
   imageRejected,
   imageReadFailed,
   reasoningRejected,
+  responseLengthLimit,
   invalidRequest,
   staleReference,
   unavailable,
@@ -300,6 +301,9 @@ final class DiagnosticContextMetadata {
     this.outputReserve,
     this.availableTools,
     this.wholeGroupsRemoved,
+    this.actualInputTokens,
+    this.actualOutputTokens,
+    this.cachedInputTokens,
   });
 
   final DiagnosticReadScope? readScope;
@@ -309,6 +313,7 @@ final class DiagnosticContextMetadata {
   final int? outputReserve;
   final int? availableTools;
   final int? wholeGroupsRemoved;
+  final int? actualInputTokens, actualOutputTokens, cachedInputTokens;
 
   Map<String, Object?> toSafeMap() {
     final result = <String, Object?>{};
@@ -322,7 +327,28 @@ final class DiagnosticContextMetadata {
       0,
       1000000,
     );
-    _addBoundedInteger(result, 'outputReserve', outputReserve, 1, 8192);
+    _addBoundedInteger(result, 'outputReserve', outputReserve, 1, 32768);
+    _addBoundedInteger(
+      result,
+      'actualInputTokens',
+      actualInputTokens,
+      0,
+      1000000,
+    );
+    _addBoundedInteger(
+      result,
+      'actualOutputTokens',
+      actualOutputTokens,
+      0,
+      1000000,
+    );
+    _addBoundedInteger(
+      result,
+      'cachedInputTokens',
+      cachedInputTokens,
+      0,
+      1000000,
+    );
     _addBoundedInteger(
       result,
       'availableTools',
@@ -354,6 +380,9 @@ final class DiagnosticContextMetadata {
             'outputReserve',
             'availableTools',
             'wholeGroupsRemoved',
+            'actualInputTokens',
+            'actualOutputTokens',
+            'cachedInputTokens',
           }.contains(key),
         )) {
       throw const FormatException('diagnostic_context_shape');
@@ -383,7 +412,10 @@ final class DiagnosticContextMetadata {
       ),
       decision: optionalEnum('decision', DiagnosticContextDecision.values),
       estimatedInputTokens: boundedInteger('estimatedInputTokens', 0, 1000000),
-      outputReserve: boundedInteger('outputReserve', 1, 8192),
+      outputReserve: boundedInteger('outputReserve', 1, 32768),
+      actualInputTokens: boundedInteger('actualInputTokens', 0, 1000000),
+      actualOutputTokens: boundedInteger('actualOutputTokens', 0, 1000000),
+      cachedInputTokens: boundedInteger('cachedInputTokens', 0, 1000000),
       availableTools: boundedInteger(
         'availableTools',
         0,

@@ -18,8 +18,6 @@ void main() {
     'conversation and morning requests receive the same meaning and voice',
     () {
       final chat = buildAgentSystemPrompt(
-        day: '2026-10-15',
-        receivedAt: '2026-10-15 08:00:00+08:00',
         definitions: [
           ModelToolDefinition(
             name: 'query_agenda',
@@ -62,10 +60,7 @@ void main() {
         morning.messages.first.content,
         contains('恰有today和notices两个字符串字段'),
       );
-      expect(
-        morning.messages.first.content,
-        contains('notices必须为空字符串'),
-      );
+      expect(morning.messages.first.content, contains('notices必须为空字符串'));
     },
   );
 

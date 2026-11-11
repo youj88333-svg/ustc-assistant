@@ -146,7 +146,7 @@ final class _AgentContextState {
           [
             scope,
             personal ? 1 : 0,
-            jsonEncode((options ?? expected.contextOptions).canonical),
+            jsonEncode([2, ...(options ?? expected.contextOptions).canonical]),
           ],
         );
         for (final c in agentDailyPermissionCategories) {
@@ -515,28 +515,41 @@ final class _AgentContextState {
 
 AgentContextOptions _decodeContextOptions(String encoded) {
   final values = (jsonDecode(encoded) as List).cast<int>();
-  if (values.length != 5) {
+  final legacy = values.length == 5;
+  if (!legacy && (values.length != 6 || values.first != 2)) {
     throw const AgentFailure(AgentFailureCode.storageFailed);
   }
+  final offset = legacy ? 0 : 1;
+  // Older policies persisted the then-default pair even when the user only
+  // saved permissions. An explicit choice in the new form is never upgraded.
+  final oldDefaults = legacy && values[0] == 16000 && values[1] == 2048;
   final result = AgentContextOptions(
-    inputTokens: values[0],
-    outputTokens: values[1],
-    modelCalls: values[2],
-    toolCalls: values[3],
-    activeSeconds: values[4],
+    inputTokens: oldDefaults
+        ? AgentContextOptions.defaultInputTokens
+        : values[offset],
+    outputTokens: oldDefaults
+        ? AgentContextOptions.defaultOutputTokens
+        : values[offset + 1],
+    modelCalls: values[offset + 2],
+    toolCalls: values[offset + 3],
+    activeSeconds: values[offset + 4],
   );
   result.validate();
   return result;
 }
 
-String _encodeItems(List<AgentContextItem> items) {
+void _validateContextItems(List<AgentContextItem> items) {
   if (items.length > 512) {
     throw const AgentFailure(AgentFailureCode.resourceLimit);
   }
   final pending = <String>{}, seen = <String>{};
-  final rows = <Map<String, Object?>>[];
   for (final item in items) {
-    AgentText.requireSafe(item.text ?? '');
+    AgentText.requireSafe(
+      item.text ?? '',
+      maxCharacters: item.role == 'assistant'
+          ? AgentText.maximumReplyCharacters
+          : 24000,
+    );
     if (item.role == 'tool') {
       if (item.text == null ||
           item.calls.isNotEmpty ||
@@ -559,20 +572,26 @@ String _encodeItems(List<AgentContextItem> items) {
       }
       pending.add(call.id);
     }
-    rows.add({
-      'role': item.role,
-      'text': item.text,
-      'tool_call_id': item.toolCallId,
-      'calls': [
-        for (final call in item.calls)
-          {'id': call.id, 'name': call.name, 'arguments': call.argumentsJson},
-      ],
-    });
   }
   if (pending.isNotEmpty) {
     throw const AgentFailure(AgentFailureCode.invalidInput);
   }
-  return jsonEncode(rows);
+}
+
+String _encodeItems(List<AgentContextItem> items) {
+  _validateContextItems(items);
+  return jsonEncode([
+    for (final item in items)
+      {
+        'role': item.role,
+        'text': item.text,
+        'tool_call_id': item.toolCallId,
+        'calls': [
+          for (final call in item.calls)
+            {'id': call.id, 'name': call.name, 'arguments': call.argumentsJson},
+        ],
+      },
+  ]);
 }
 
 List<AgentContextItem> _decodeItems(String encoded) {
@@ -592,6 +611,6 @@ List<AgentContextItem> _decodeItems(String encoded) {
       ],
     );
   }).toList();
-  _encodeItems(items);
+  _validateContextItems(items);
   return List.unmodifiable(items);
 }

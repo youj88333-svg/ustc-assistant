@@ -253,7 +253,8 @@ void main() {
         );
         expect(find.byKey(const ValueKey('agent-speech-toggle')), findsNothing);
         expect(find.byIcon(Icons.mic_none_rounded), findsNothing);
-        expect(find.byType(DiagnosticsExportButton), findsOneWidget);
+        expect(find.byType(DiagnosticsExportButton), findsNothing);
+        expect(find.byKey(const ValueKey('agent-page-title')), findsNothing);
         expect(service.bodies, isEmpty);
         debugPrint('I4 native product: one fresh owned product runtime opened');
 
@@ -746,10 +747,23 @@ void main() {
         await tester.runAsync(
           () => runtime.calendar.load(
             day: day.add(const Duration(days: 1)),
-            mode: CalendarViewMode.day,
+            mode: CalendarViewMode.week,
           ),
         );
         await _frames(tester);
+        expect(
+          find.byKey(const ValueKey('calendar-week-horizontal-scroll')),
+          findsNothing,
+        );
+        expect(
+          find.byWidgetPredicate(
+            (widget) =>
+                widget.key ==
+                    const ValueKey('calendar-workspace-date-picker') &&
+                widget is IconButton,
+          ),
+          findsOneWidget,
+        );
         await _saveScreen(tester, captureKey, runtime, 'i4-calendar.png');
         await _tap(tester, 'calendar-workspace-tab-tasks');
         expect(find.byType(TaskWorkspacePage), findsOneWidget);
@@ -1570,6 +1584,7 @@ final class _LoopbackService {
       final script = _replies.removeFirst();
       stage = 'toolSet';
       if (!script.summary) {
+        expectSync(body['max_tokens'], AgentContextOptions.defaultOutputTokens);
         final tools = body['tools'] as List;
         expectSync(tools, hasLength(20));
         expectSync(

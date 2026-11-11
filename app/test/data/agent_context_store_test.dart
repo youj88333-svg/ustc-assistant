@@ -26,6 +26,43 @@ final _syntheticKey = Uint8List.fromList(
 
 void main() {
   test(
+    'stored legacy defaults grow without resetting custom budgets',
+    () async {
+      final store = await _open();
+      final initial = await store.agent.readAgentUsePolicy();
+      await store.agent.saveAgentUsePolicy(
+        initial,
+        personalContentAllowed: false,
+        dailyOperationsAllowed: false,
+      );
+
+      await store.customStatement('UPDATE agent_use_policy SET budget_json=?', [
+        '[16000,2048,8,32,240]',
+      ]);
+      var policy = await store.agent.readAgentUsePolicy();
+      expect(policy.contextOptions.canonical, [131072, 16384, 8, 32, 240]);
+
+      await store.customStatement('UPDATE agent_use_policy SET budget_json=?', [
+        '[16000,1024,8,32,240]',
+      ]);
+      policy = await store.agent.readAgentUsePolicy();
+      expect(policy.contextOptions.canonical, [16000, 1024, 8, 32, 240]);
+
+      await store.agent.saveAgentUsePolicy(
+        policy,
+        personalContentAllowed: false,
+        dailyOperationsAllowed: false,
+        contextOptions: const AgentContextOptions(
+          inputTokens: 16000,
+          outputTokens: 2048,
+        ),
+      );
+      policy = await store.agent.readAgentUsePolicy();
+      expect(policy.contextOptions.canonical, [16000, 2048, 16, 48, 300]);
+    },
+  );
+
+  test(
     'basic policy is empty and the daily opt-in grants only its 17 categories',
     () async {
       final store = await _open();
@@ -37,7 +74,7 @@ void main() {
 
       for (final invalidOptions in [
         AgentContextOptions(inputTokens: 4095),
-        AgentContextOptions(outputTokens: 8193),
+        AgentContextOptions(outputTokens: 32769),
         AgentContextOptions(modelCalls: 0),
         AgentContextOptions(toolCalls: 257),
         AgentContextOptions(activeSeconds: 3601),
@@ -1042,6 +1079,84 @@ void main() {
       await store.agent.finishRun(ticket, AgentMessageStatus.complete);
     },
   );
+
+  test('schema 20 upgrades long replies without changing history IDs', () async {
+    final file = await _temporaryDatabase();
+    var store = await _openAt(file);
+    final oldTicket = await _ticket(store, question: '升级前的合成问题');
+    await store.agent.saveAssistant(oldTicket, '升级前的合成回复');
+    final policy = await store.agent.readAgentUsePolicy();
+    await store.agent.saveAgentTurn(
+      oldTicket,
+      items: [AgentContextItem(role: 'assistant', text: '升级前的合成回复')],
+      includesPersonalContent: false,
+      policyRevision: policy.revision,
+    );
+    await store.agent.finishRun(oldTicket, AgentMessageStatus.complete);
+    final history = await store.agent.readConversationContext();
+    await store.close();
+
+    final raw = sqlite3.sqlite3.open(file.path);
+    try {
+      final schema =
+          raw
+                  .select(
+                    "SELECT sql FROM sqlite_schema WHERE name='agent_messages'",
+                  )
+                  .single['sql']
+              as String;
+      final oldSchema = schema
+          .replaceFirst('"agent_messages"', 'agent_messages_v20')
+          .replaceFirst(
+            RegExp(
+              r"length\(text\)<=CASE role WHEN 'assistant' THEN \d+ ELSE 24000 END",
+            ),
+            'length(text)<=24000',
+          );
+      expect(oldSchema, contains('CREATE TABLE agent_messages_v20'));
+      expect(oldSchema, contains('CHECK(length(text)<=24000)'));
+      raw.execute('BEGIN');
+      raw.execute(oldSchema);
+      raw.execute(
+        'INSERT INTO agent_messages_v20 SELECT * FROM agent_messages',
+      );
+      raw.execute('DROP TABLE agent_messages');
+      raw.execute('ALTER TABLE agent_messages_v20 RENAME TO agent_messages');
+      raw.execute(
+        'CREATE INDEX agent_messages_conversation ON agent_messages(conversation_id,message_id)',
+      );
+      raw.execute(
+        "UPDATE sqlite_sequence SET seq=100 WHERE name='agent_messages'",
+      );
+      raw.execute('PRAGMA user_version=20');
+      raw.execute('COMMIT');
+    } finally {
+      raw.close();
+    }
+
+    store = await _openAt(file, configure: false);
+    final migrated = await store.agent.readConversationContext();
+    expect(
+      migrated.messages.map((message) => message.id),
+      history.messages.map((message) => message.id),
+    );
+    expect(migrated.messages.last.text, '升级前的合成回复');
+    expect(
+      migrated.turns.single.assistantMessageId,
+      oldTicket.assistantMessageId,
+    );
+
+    final ticket = await _ticket(store);
+    expect(ticket.assistantMessageId, 102);
+    final longReply = '中文合成回复' * 5000;
+    await store.agent.saveAssistant(ticket, longReply);
+    await store.agent.finishRun(ticket, AgentMessageStatus.complete);
+    await store.close();
+
+    store = await _openAt(file, configure: false);
+    final resumed = await store.agent.readConversationContext();
+    expect(resumed.messages.last.text, longReply);
+  });
 
   test(
     'schema 14 upgrade preserves old chat, agenda, and grant without inventing calls',

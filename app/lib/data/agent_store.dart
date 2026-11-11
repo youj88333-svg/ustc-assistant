@@ -501,6 +501,37 @@ final class AgentStore
     'ALTER TABLE agent_messages ADD COLUMN image_count INTEGER NOT NULL DEFAULT 0 CHECK(image_count BETWEEN 0 AND 3)',
   ];
 
+  // Preserve message IDs (also used by the transcript and summary boundary)
+  // and the AUTOINCREMENT high-water mark, including IDs of deleted messages.
+  static const upgradeFrom20 = <String>[
+    '''CREATE TABLE agent_messages_v21 (
+      message_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id TEXT NOT NULL, run_id TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+      text TEXT NOT NULL CHECK(length(text)<=CASE role WHEN 'assistant' THEN ${AgentText.maximumReplyCharacters} ELSE 24000 END),
+      status TEXT NOT NULL CHECK(status IN ('streaming','complete','interrupted','cancelled','failed')),
+      created_at INTEGER NOT NULL,
+      evidence_json TEXT NOT NULL DEFAULT '[]' CHECK(length(evidence_json)<=65536),
+      steps_json TEXT NOT NULL DEFAULT '[]' CHECK(length(steps_json)<=8192),
+      image_count INTEGER NOT NULL DEFAULT 0 CHECK(image_count BETWEEN 0 AND 3),
+      context_private INTEGER NOT NULL DEFAULT 0 CHECK(context_private IN (0,1)))''',
+    '''INSERT INTO agent_messages_v21
+      (message_id,conversation_id,run_id,role,text,status,created_at,evidence_json,steps_json,image_count,context_private)
+      SELECT message_id,conversation_id,run_id,role,text,status,created_at,evidence_json,steps_json,image_count,context_private
+      FROM agent_messages''',
+    """UPDATE sqlite_sequence SET seq=MAX(seq,COALESCE(
+      (SELECT seq FROM sqlite_sequence WHERE name='agent_messages'),seq))
+      WHERE name='agent_messages_v21'""",
+    """INSERT INTO sqlite_sequence(name,seq)
+      SELECT 'agent_messages_v21',seq FROM sqlite_sequence WHERE name='agent_messages'
+      AND NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name='agent_messages_v21')""",
+    """DELETE FROM sqlite_sequence WHERE name='agent_messages_v21' AND seq=0
+      AND NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name='agent_messages')""",
+    'DROP TABLE agent_messages',
+    'ALTER TABLE agent_messages_v21 RENAME TO agent_messages',
+    'CREATE INDEX agent_messages_conversation ON agent_messages(conversation_id,message_id)',
+  ];
+
   @override
   Future<AgentPlanningPreferences> readPlanningPreferences() =>
       _readPlanningPreferences();
@@ -1124,38 +1155,37 @@ final class AgentStore
           ],
         )
         .get();
-    return Future.wait(
-      rows
-          .map(
-            (r) async => AgentMessage(
-              id: r.read<int>('message_id'),
-              role: AgentMessageRole.values.byName(r.read<String>('role')),
-              text: r.read<String>('text'),
-              status: AgentMessageStatus.values.byName(
-                r.read<String>('status'),
-              ),
-              createdAtUtc: DateTime.fromMicrosecondsSinceEpoch(
-                r.read<int>('created_at'),
-                isUtc: true,
-              ),
-              evidence: List.unmodifiable(
-                (jsonDecode(r.read<String>('evidence_json')) as List).map(
-                  agentEvidenceFromMap,
-                ),
-              ),
-              steps: List.unmodifiable(
-                (jsonDecode(r.read<String>('steps_json')) as List).map(
-                  agentStepFromMap,
-                ),
-              ),
-              imageCount: r.read<int>('image_count'),
-              actions: r.read<String>('role') == 'assistant'
-                  ? await _actionViews(r.read<String>('run_id'))
-                  : [],
+    final actionsByRun = await _actionViewsByRun({
+      for (final row in rows)
+        if (row.read<String>('role') == 'assistant') row.read<String>('run_id'),
+    });
+    return [
+      for (final r in rows)
+        AgentMessage(
+          id: r.read<int>('message_id'),
+          role: AgentMessageRole.values.byName(r.read<String>('role')),
+          text: r.read<String>('text'),
+          status: AgentMessageStatus.values.byName(r.read<String>('status')),
+          createdAtUtc: DateTime.fromMicrosecondsSinceEpoch(
+            r.read<int>('created_at'),
+            isUtc: true,
+          ),
+          evidence: List.unmodifiable(
+            (jsonDecode(r.read<String>('evidence_json')) as List).map(
+              agentEvidenceFromMap,
             ),
-          )
-          .toList(),
-    );
+          ),
+          steps: List.unmodifiable(
+            (jsonDecode(r.read<String>('steps_json')) as List).map(
+              agentStepFromMap,
+            ),
+          ),
+          imageCount: r.read<int>('image_count'),
+          actions: r.read<String>('role') == 'assistant'
+              ? actionsByRun[r.read<String>('run_id')] ?? const []
+              : [],
+        ),
+    ];
   }
 
   Future<void> _budget(int extraBytes) async {
@@ -1253,6 +1283,7 @@ final class AgentStore
         conversationGeneration: conv.read<int>('generation'),
         runGeneration: generation,
         assistantMessageId: message.read<int>('id'),
+        receivedAtUtc: DateTime.fromMicrosecondsSinceEpoch(now, isUtc: true),
       );
     });
     _tickets[ticket.runId] = ticket;
@@ -1287,7 +1318,10 @@ final class AgentStore
   @override
   Future<void> saveAssistant(AgentRunTicket ticket, String text) => _serial(
     () => _db.transaction(() async {
-      AgentText.requireSafe(text);
+      AgentText.requireSafe(
+        text,
+        maxCharacters: AgentText.maximumReplyCharacters,
+      );
       await _requireTicket(ticket);
       final current = await _db
           .customSelect(

@@ -301,7 +301,8 @@ void main() {
         expect(
           clarificationRequest.messages.any(
             (message) =>
-                message.role == 'user' && message.content == ambiguousQuestion,
+                message.role == 'user' &&
+                (message.content ?? '').endsWith('\n$ambiguousQuestion'),
           ),
           isTrue,
         );
@@ -527,13 +528,27 @@ void main() {
         ]) {
           final tools = _ReadTools();
           final rig = await _rig(configured: true, readTools: tools);
-          rig.gateway.enqueueEvents([completion]);
+          final partial = '合成已收到的长回复\n${'x' * 25000}';
+          rig.gateway.enqueueEvents([
+            if (completion.finishReason == 'length') ModelTextDelta(partial),
+            completion,
+          ]);
           await rig.coordinator.send('只读合成问题');
           expect(
             rig.coordinator.view.failure,
-            AgentFailureCode.toolUnavailable,
+            completion.finishReason == 'length'
+                ? AgentFailureCode.responseLengthLimit
+                : AgentFailureCode.toolUnavailable,
           );
           expect(tools.executed, 0);
+          if (completion.finishReason == 'length') {
+            expect(rig.coordinator.view.messages.last.text, partial);
+            expect(
+              rig.coordinator.view.messages.last.status,
+              AgentMessageStatus.interrupted,
+            );
+            expect(rig.gateway.generations.single.request.maxTokens, 16384);
+          }
           expect(await _activeRun(rig.store), isNull);
         }
       },

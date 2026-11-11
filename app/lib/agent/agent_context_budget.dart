@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../core/agent_context_contract.dart';
 import 'model_gateway_contract.dart';
 
 /// Immutable soft input and per-run execution budget for Agent context work.
@@ -8,12 +9,14 @@ import 'model_gateway_contract.dart';
 /// context capacity and must not decide business scope or permissions.
 final class AgentContextBudget {
   AgentContextBudget({
-    this.maximumInputTokens = 16000,
-    this.maximumOutputTokens = 2048,
+    this.maximumInputTokens =
+        AgentContextOptions.defaultInputTokens -
+        AgentContextOptions.defaultOutputTokens,
+    this.maximumOutputTokens = AgentContextOptions.defaultOutputTokens,
     this.maximumModelCalls = 16,
     this.maximumToolCalls = 48,
     this.activeTimeout = const Duration(seconds: 300),
-    this.softFraction = 0.75,
+    this.softFraction = 0.85,
   }) {
     _requireRange(
       maximumInputTokens,
@@ -57,9 +60,10 @@ final class AgentContextBudget {
   }
 
   static const minimumInputTokens = 4096;
-  static const maximumInputTokensLimit = 65536;
+  static const maximumInputTokensLimit = AgentContextOptions.maximumInputTokens;
   static const minimumOutputTokens = 1;
-  static const maximumOutputTokensLimit = 8192;
+  static const maximumOutputTokensLimit =
+      AgentContextOptions.maximumOutputTokens;
   static const minimumModelCalls = 1;
   static const maximumModelCallsLimit = 64;
   static const minimumToolCalls = 1;
@@ -139,10 +143,7 @@ final class AgentContextBudget {
       minimumMessages,
       maximumMessagesLimit,
     );
-    final retained = groups
-        .map((group) => List<ModelChatMessage>.unmodifiable(group))
-        .toList();
-    if (retained.any((group) => group.isEmpty)) {
+    if (groups.any((group) => group.isEmpty)) {
       throw ArgumentError.value(
         groups,
         'groups',
@@ -154,45 +155,44 @@ final class AgentContextBudget {
     final fixedOverflow =
         fixedEstimate.estimatedInputTokens > maximumInputTokens ||
         fixedMessages.length > maximumMessages;
-    var estimate = _estimateGroups(retained, fixedMessages, tools);
-    var messageCount = _messageCount(retained, fixedMessages);
+    var textTokens = fixedEstimate.textTokens;
+    var imageCount = fixedEstimate.imageCount;
+    var messageCount = fixedMessages.length;
+    final estimates = <AgentContextEstimate>[];
+    for (final group in groups) {
+      final estimate = estimateMessages(group, const []);
+      estimates.add(estimate);
+      textTokens += estimate.textTokens;
+      imageCount += estimate.imageCount;
+      messageCount += group.length;
+    }
     var removedGroupCount = 0;
 
-    while ((estimate.estimatedInputTokens > maximumInputTokens ||
+    while ((textTokens + imageCount * imageTokenReservePerImage >
+                maximumInputTokens ||
             messageCount > maximumMessages) &&
-        retained.isNotEmpty) {
-      retained.removeAt(0);
+        removedGroupCount < groups.length) {
+      final removed = estimates[removedGroupCount];
+      textTokens -= removed.textTokens;
+      imageCount -= removed.imageCount;
+      messageCount -= groups[removedGroupCount].length;
       removedGroupCount++;
-      estimate = _estimateGroups(retained, fixedMessages, tools);
-      messageCount = _messageCount(retained, fixedMessages);
     }
 
     return AgentContextTrimResult(
-      retainedGroups: retained,
+      retainedGroups: groups.sublist(removedGroupCount),
       removedGroupCount: removedGroupCount,
-      estimate: estimate,
+      estimate: AgentContextEstimate(
+        textTokens: textTokens,
+        imageCount: imageCount,
+        estimatedImageTokens: imageCount * imageTokenReservePerImage,
+      ),
       maximumInputTokens: maximumInputTokens,
       messageCount: messageCount,
       maximumMessages: maximumMessages,
       fixedOverflow: fixedOverflow,
     );
   }
-
-  AgentContextEstimate _estimateGroups(
-    List<List<ModelChatMessage>> groups,
-    List<ModelChatMessage> fixedMessages,
-    List<ModelToolDefinition> tools,
-  ) => estimateMessages([
-    ...fixedMessages,
-    for (final group in groups) ...group,
-  ], tools);
-
-  static int _messageCount(
-    List<List<ModelChatMessage>> groups,
-    List<ModelChatMessage> fixedMessages,
-  ) =>
-      fixedMessages.length +
-      groups.fold<int>(0, (count, group) => count + group.length);
 
   static const _messageOverheadTokens = 4;
   static const _toolCallOverheadTokens = 4;

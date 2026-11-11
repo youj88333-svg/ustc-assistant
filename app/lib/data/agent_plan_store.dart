@@ -1554,30 +1554,41 @@ extension _AgentActionStorage on AgentStore {
     );
   }
 
-  Future<List<AgentActionView>> _actionViews(String runId) async {
+  Future<Map<String, List<AgentActionView>>> _actionViewsByRun(
+    Set<String> runIds,
+  ) async {
+    if (runIds.isEmpty) return const {};
+    final placeholders = List.filled(runIds.length, '?').join(',');
     final rows = await _db
         .customSelect(
-          'SELECT * FROM agent_actions WHERE run_id=? ORDER BY created_at,action_id LIMIT 21',
-          variables: [Variable.withString(runId)],
+          'SELECT * FROM agent_actions WHERE run_id IN ($placeholders) '
+          'ORDER BY run_id,created_at,action_id LIMIT ?',
+          variables: [
+            for (final runId in runIds) Variable.withString(runId),
+            Variable.withInt(runIds.length * 21),
+          ],
         )
         .get();
-    if (rows.length > 20) {
-      throw const AgentFailure(AgentFailureCode.storageFailed);
+    final grouped = <String, List<AgentActionView>>{};
+    for (final row in rows) {
+      final actions = grouped.putIfAbsent(row.read<String>('run_id'), () => []);
+      if (actions.length == 20) {
+        throw const AgentFailure(AgentFailureCode.storageFailed);
+      }
+      actions.add(
+        _actionFromMap({
+          'id': row.read<String>('action_id'),
+          'kind': row.read<String>('kind'),
+          'status': row.read<String>('status'),
+          'title': row.read<String>('title'),
+          'details': jsonDecode(row.read<String>('details_json')),
+          'warning': row.read<String>('warning'),
+          'count': row.read<int>('committed_count'),
+          'authorization': row.read<String>('authorization'),
+        }),
+      );
     }
-    return rows
-        .map(
-          (r) => _actionFromMap({
-            'id': r.read<String>('action_id'),
-            'kind': r.read<String>('kind'),
-            'status': r.read<String>('status'),
-            'title': r.read<String>('title'),
-            'details': jsonDecode(r.read<String>('details_json')),
-            'warning': r.read<String>('warning'),
-            'count': r.read<int>('committed_count'),
-            'authorization': r.read<String>('authorization'),
-          }),
-        )
-        .toList();
+    return grouped;
   }
 }
 

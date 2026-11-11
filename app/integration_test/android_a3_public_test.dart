@@ -156,7 +156,13 @@ void main() {
             targets: targets,
             parser: parser,
           );
-          expect(JwStore.currentSchemaVersion, 20);
+          expect(
+            (await harness.store
+                    .customSelect('PRAGMA user_version')
+                    .getSingle())
+                .read<int>('user_version'),
+            JwStore.currentSchemaVersion,
+          );
 
           final listing = await harness.queries.browseCampus(
             CampusColumn.teachNotice,

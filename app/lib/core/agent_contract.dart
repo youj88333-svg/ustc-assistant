@@ -28,6 +28,7 @@ enum AgentFailureCode {
   toolUnavailable,
   imageRejected,
   contextLimit,
+  responseLengthLimit,
   reasoningRejected,
 }
 
@@ -345,10 +346,12 @@ final class AgentRunTicket {
     required this.conversationGeneration,
     required this.runGeneration,
     required this.assistantMessageId,
+    this.receivedAtUtc,
   });
   final AgentAuthority authority;
   final String runId, conversationId;
   final int conversationGeneration, runGeneration, assistantMessageId;
+  final DateTime? receivedAtUtc;
   @override
   String toString() => 'AgentRunTicket';
 }

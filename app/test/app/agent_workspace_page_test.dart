@@ -9,6 +9,7 @@ import 'package:ustc_assistant_m0/app/agent_workspace_contract.dart';
 import 'package:ustc_assistant_m0/app/agent_workspace_page.dart';
 import 'package:ustc_assistant_m0/app/workspace_visibility.dart';
 import 'package:ustc_assistant_m0/core/agent_action_contract.dart';
+import 'package:ustc_assistant_m0/core/diagnostics_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
 import 'package:ustc_assistant_m0/core/morning_brief_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_permission_contract.dart';
@@ -170,6 +171,111 @@ void main() {
     expect(find.byKey(const ValueKey('agent-new-conversation')), findsNothing);
     expect(find.byKey(const ValueKey('agent-conversation-list')), findsNothing);
     expect(port.sent, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'compact iOS Agent keeps shell settings, reply status and moves log export out',
+    (tester) async {
+      await _setSize(tester, const Size(320, 780));
+      final port = _FakeAgentPort(
+        view: _configuredView().copyWithForTest(
+          failure: AgentFailureCode.responseLengthLimit,
+          messages: [
+            AgentMessage(
+              id: 901,
+              role: AgentMessageRole.assistant,
+              text: '已收到并保留的部分回复。',
+              status: AgentMessageStatus.interrupted,
+              createdAtUtc: DateTime.utc(2026, 11, 10),
+            ),
+          ],
+        ),
+      );
+      final diagnostics = _FakePageDiagnostics();
+      addTearDown(port.dispose);
+      var openedSettings = false;
+
+      await tester.pumpWidget(
+        _host(
+          AgentWorkspacePage(
+            controller: port,
+            onSettings: () {},
+            onOpenSettings: () => openedSettings = true,
+            diagnostics: diagnostics,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('agent-page-title')), findsNothing);
+      expect(find.text('Agent'), findsNothing);
+      expect(find.text('已收到并保留的部分回复。'), findsOneWidget);
+      expect(find.text('部分回复 · 已中断'), findsOneWidget);
+      expect(find.textContaining('输出长度上限'), findsOneWidget);
+      expect(find.byKey(const ValueKey('agent-settings-open')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('diagnostics-export-button')),
+        findsNothing,
+      );
+
+      final settingsButton = tester.widget<IconButton>(
+        find.byKey(const ValueKey('shell-nav-settings')),
+      );
+      expect(settingsButton.tooltip, '设置');
+      final settingsRect = tester.getRect(
+        find.byKey(const ValueKey('shell-nav-settings')),
+      );
+      expect(settingsRect.width, greaterThanOrEqualTo(44));
+      expect(settingsRect.height, greaterThanOrEqualTo(44));
+      await tester.tap(find.byKey(const ValueKey('shell-nav-settings')));
+      expect(openedSettings, isTrue);
+
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('wide Agent keeps its title, assistant label and inline logs', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1000, 900));
+    final port = _FakeAgentPort(
+      view: _configuredView().copyWithForTest(
+        failure: AgentFailureCode.responseLengthLimit,
+        messages: [
+          AgentMessage(
+            id: 902,
+            role: AgentMessageRole.assistant,
+            text: '已收到并保留的部分回复。',
+            status: AgentMessageStatus.interrupted,
+            createdAtUtc: DateTime.utc(2026, 11, 10),
+          ),
+        ],
+      ),
+    );
+    final diagnostics = _FakePageDiagnostics();
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(
+      _host(
+        AgentWorkspacePage(
+          controller: port,
+          onSettings: () {},
+          onOpenSettings: () {},
+          diagnostics: diagnostics,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('agent-page-title')), findsOneWidget);
+    expect(find.text('Agent'), findsNWidgets(2));
+    expect(find.byKey(const ValueKey('shell-nav-settings')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('diagnostics-export-button')),
+      findsOneWidget,
+    );
+    expect(find.textContaining('输出长度上限'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -2206,3 +2312,27 @@ _FakeAgentPort _configuredPort() => _FakeAgentPort(view: _configuredView());
 Uint8List _testPng1x1() => base64.decode(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL+XwAAAABJRU5ErkJggg==',
 );
+
+final class _FakePageDiagnostics implements DiagnosticsPort {
+  @override
+  DiagnosticsView diagnosticsView = const DiagnosticsView(available: true);
+
+  @override
+  Future<void> close() async {}
+
+  @override
+  Future<void> clear() async {}
+
+  @override
+  Future<void> flush() async {}
+
+  @override
+  Future<String> exportRecent() async =>
+      '{"kind":"ustc-diagnostics-export-v1","records":[]}';
+
+  @override
+  DiagnosticTrace newTrace() => DiagnosticTrace('1' * 32);
+
+  @override
+  void record(DiagnosticEvent event) {}
+}

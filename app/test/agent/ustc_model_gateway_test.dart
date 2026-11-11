@@ -7,6 +7,31 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
 import 'package:ustc_assistant_m0/agent/ustc_model_gateway.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
+import 'package:ustc_assistant_m0/core/agent_text.dart';
+
+Future<void> _respondWithSse(HttpResponse response, String events) async {
+  response.headers.contentType = ContentType(
+    'text',
+    'event-stream',
+    charset: 'utf-8',
+  );
+  response.write(events);
+  await response.close();
+}
+
+Future<void> _respondWithText(HttpResponse response, String text) =>
+    _respondWithSse(
+      response,
+      'data: ${jsonEncode({
+        'choices': [
+          {
+            'index': 0,
+            'delta': {'content': text},
+            'finish_reason': 'stop',
+          },
+        ],
+      })}\n\ndata: [DONE]\n\n',
+    );
 
 void main() {
   group('UstcModelGateway', () {
@@ -405,7 +430,7 @@ void main() {
             'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_","type":"function","function":{"name":"echo_","arguments":"{\\"value\\":"}}]},"finish_reason":null}]}\n\n',
             'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"7","function":{"name":"probe","arguments":"\\"合成\\"}"}}]},"finish_reason":null}]}\n\n',
             'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n',
-            'data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":4}}\n\n',
+            'data: {"choices":[],"usage":{"prompt_tokens":12,"prompt_cache_hit_tokens":5,"completion_tokens":4}}\n\n',
             'data: [DONE]\n\n',
           ];
           final bytes = utf8.encode(events.join());
@@ -455,6 +480,7 @@ void main() {
         );
         expect(completion.finishReason, 'tool_calls');
         expect(completion.inputTokens, 12);
+        expect(completion.cachedInputTokens, 5);
         expect(completion.outputTokens, 4);
         expect(completion.toolCalls, hasLength(1));
         expect(completion.toolCalls.single.id, 'call_7');
@@ -722,6 +748,230 @@ void main() {
     });
 
     test(
+      'accepts a 512 Ki UTF-16 prompt with a text body over 1 MiB',
+      () async {
+        var requests = 0;
+        var requestBodyBytes = 0;
+        await server.start((request) async {
+          requests++;
+          final body = await utf8.decoder.bind(request).join();
+          requestBodyBytes = utf8.encode(body).length;
+          await _respondWithText(request.response, '合成输入已接收');
+        });
+        final gateway = server.gateway();
+        final content = '😀' * (256 * 1024);
+        expect(content.length, 512 * 1024);
+
+        await gateway
+            .generate(
+              ModelRequest(
+                modelId: 'synthetic-model',
+                messages: [ModelChatMessage(role: 'user', content: content)],
+              ),
+              _key(),
+            )
+            .drain<void>();
+
+        expect(requests, 1);
+        expect(requestBodyBytes, greaterThan(1024 * 1024));
+        expect(requestBodyBytes, lessThanOrEqualTo(2 * 1024 * 1024));
+        await expectLater(
+          gateway
+              .generate(
+                ModelRequest(
+                  modelId: 'synthetic-model',
+                  messages: [
+                    ModelChatMessage(role: 'user', content: '${content}x'),
+                  ],
+                ),
+                _key(),
+              )
+              .toList(),
+          throwsA(_failure(AgentFailureCode.resourceLimit)),
+        );
+        await expectLater(
+          gateway
+              .generate(
+                ModelRequest(
+                  modelId: 'synthetic-model',
+                  messages: [
+                    ModelChatMessage(
+                      role: 'user',
+                      content: '\u0001' * (400 * 1024),
+                    ),
+                  ],
+                ),
+                _key(),
+              )
+              .toList(),
+          throwsA(_failure(AgentFailureCode.resourceLimit)),
+        );
+        expect(requests, 1);
+        await gateway.close();
+      },
+    );
+
+    test('keeps max_tokens bounded to 32768', () async {
+      var requests = 0;
+      await server.start((request) async {
+        requests++;
+        await request.response.close();
+      });
+      final gateway = server.gateway();
+
+      for (final maxTokens in [0, 32769]) {
+        await expectLater(
+          gateway
+              .generate(
+                ModelRequest(
+                  modelId: 'synthetic-model',
+                  messages: [ModelChatMessage(role: 'user', content: '合成输入')],
+                  maxTokens: maxTokens,
+                ),
+                _key(),
+              )
+              .toList(),
+          throwsA(_failure(AgentFailureCode.invalidInput)),
+        );
+      }
+      expect(requests, 0);
+      await gateway.close();
+    });
+
+    test(
+      'accepts a bounded reply with verbose SSE framing over 2 MiB',
+      () async {
+        await server.start((request) async {
+          await utf8.decoder.bind(request).join();
+          request.response.headers.contentType = ContentType(
+            'text',
+            'event-stream',
+            charset: 'utf-8',
+          );
+          for (var i = 0; i < 64; i++) {
+            final data = <String, Object?>{
+              'choices': [
+                {
+                  'index': 0,
+                  'delta': {'content': 'x' * 2048},
+                  'finish_reason': i == 63 ? 'stop' : null,
+                },
+              ],
+            };
+            final dataLine = 'data: ${jsonEncode(data)}';
+            final commentCharacters = 64 * 1024 - dataLine.length - 4;
+            request.response.write(
+              ':${'c' * commentCharacters}\n$dataLine\n\n',
+            );
+          }
+          request.response.write('data: [DONE]\n\n');
+          await request.response.close();
+        });
+        final gateway = server.gateway();
+        final events = await gateway
+            .generate(
+              ModelRequest(
+                modelId: 'synthetic-model',
+                messages: [ModelChatMessage(role: 'user', content: '合成输入')],
+                maxTokens: 16 * 1024,
+              ),
+              _key(),
+            )
+            .toList();
+
+        expect(
+          events.whereType<ModelTextDelta>().map((event) => event.text).join(),
+          'x' * AgentText.maximumReplyCharacters,
+        );
+        expect(events.whereType<ModelCompleted>().single.finishReason, 'stop');
+        await gateway.close();
+      },
+    );
+
+    test('finish_reason length drops incomplete tool arguments', () async {
+      final tool = ModelToolDefinition(
+        name: 'echo_probe',
+        description: 'synthetic probe',
+        parameters: const <String, Object?>{'type': 'object'},
+      );
+      await server.start((request) async {
+        await utf8.decoder.bind(request).join();
+        await _respondWithSse(
+          request.response,
+          'data: ${jsonEncode({
+            'choices': [
+              {
+                'index': 0,
+                'delta': {
+                  'tool_calls': [
+                    {
+                      'index': 0,
+                      'id': 'call_1',
+                      'type': 'function',
+                      'function': {'name': 'echo_probe', 'arguments': '{"value":'},
+                    },
+                  ],
+                },
+                'finish_reason': null,
+              },
+            ],
+          })}\n\n'
+          'data: ${jsonEncode({
+            'choices': [
+              {
+                'index': 0,
+                'delta': {'content': '部分回答'},
+                'finish_reason': 'length',
+              },
+            ],
+          })}\n\n'
+          'data: [DONE]\n\n',
+        );
+      });
+      final gateway = server.gateway();
+      final events = await gateway.generate(_request(tool), _key()).toList();
+      final completion = events.whereType<ModelCompleted>().single;
+
+      expect(
+        events.whereType<ModelTextDelta>().map((event) => event.text).join(),
+        '部分回答',
+      );
+      expect(completion.finishReason, 'length');
+      expect(completion.toolCalls, isEmpty);
+      await gateway.close();
+    });
+
+    test('missing or invalid cache usage stays unknown', () async {
+      final cacheMetrics = <Object?>['missing', 'invalid', 13];
+      var responseIndex = 0;
+      await server.start((request) async {
+        await utf8.decoder.bind(request).join();
+        final cacheMetric = cacheMetrics[responseIndex++];
+        final usage = <String, Object?>{
+          'prompt_tokens': 12,
+          'completion_tokens': 4,
+          if (cacheMetric != 'missing') 'prompt_cache_hit_tokens': cacheMetric,
+        };
+        await _respondWithSse(
+          request.response,
+          'data: ${jsonEncode({'choices': <Object?>[], 'usage': usage})}\n\n'
+          'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+          'data: [DONE]\n\n',
+        );
+      });
+      final gateway = server.gateway();
+
+      for (var i = 0; i < cacheMetrics.length; i++) {
+        final completion = (await gateway.generate(_request(), _key()).toList())
+            .whereType<ModelCompleted>()
+            .single;
+        expect(completion.inputTokens, 12);
+        expect(completion.cachedInputTokens, isNull);
+      }
+      await gateway.close();
+    });
+
+    test(
       'rejects malformed reasoning without turning it into answer text',
       () async {
         await server.start((request) async {
@@ -744,7 +994,7 @@ void main() {
       },
     );
 
-    test('bounds reasoning separately from final answer text', () async {
+    test('caps reasoning preview without rejecting the final answer', () async {
       await server.start((request) async {
         await utf8.decoder.bind(request).join();
         request.response.headers.contentType = ContentType(
@@ -752,7 +1002,7 @@ void main() {
           'event-stream',
           charset: 'utf-8',
         );
-        for (var i = 0; i < 9; i++) {
+        for (var i = 0; i < 8; i++) {
           request.response.write(
             'data: ${jsonEncode({
               'choices': [
@@ -765,13 +1015,35 @@ void main() {
             })}\n\n',
           );
         }
+        request.response.write(
+          'data: ${jsonEncode({
+            'choices': [
+              {
+                'index': 0,
+                'delta': {'reasoning': 'preview tail', 'content': '合成答案'},
+                'finish_reason': 'stop',
+              },
+            ],
+          })}\n\n'
+          'data: [DONE]\n\n',
+        );
         await request.response.close();
       });
       final gateway = server.gateway();
-      await expectLater(
-        gateway.generate(_request(), _key()).toList(),
-        throwsA(_failure(AgentFailureCode.resourceLimit)),
+      final events = await gateway.generate(_request(), _key()).toList();
+      expect(
+        events
+            .whereType<ModelReasoningDelta>()
+            .map((event) => event.text)
+            .join()
+            .length,
+        128 * 1024,
       );
+      expect(
+        events.whereType<ModelTextDelta>().map((event) => event.text).join(),
+        '合成答案',
+      );
+      expect(events.whereType<ModelCompleted>().single.finishReason, 'stop');
       await gateway.close();
     });
 
@@ -818,33 +1090,88 @@ void main() {
       },
     );
 
-    test('enforces the streamed text character limit', () async {
-      await server.start((request) async {
-        await utf8.decoder.bind(request).join();
-        request.response.headers.contentType = ContentType(
-          'text',
-          'event-stream',
+    test(
+      'reports a reply length limit before completing pending tools',
+      () async {
+        final tool = ModelToolDefinition(
+          name: 'echo_probe',
+          description: 'synthetic probe',
+          parameters: const <String, Object?>{'type': 'object'},
         );
-        final event = <String, Object?>{
-          'choices': [
-            {
-              'index': 0,
-              'delta': {'content': 'x' * 24001},
-              'finish_reason': null,
-            },
-          ],
-        };
-        request.response.write('data: ${jsonEncode(event)}\n\n');
-        await request.response.close();
-      });
-      final gateway = server.gateway();
+        await server.start((request) async {
+          await utf8.decoder.bind(request).join();
+          request.response.headers.contentType = ContentType(
+            'text',
+            'event-stream',
+          );
+          request.response.write(
+            'data: ${jsonEncode({
+              'choices': [
+                {
+                  'index': 0,
+                  'delta': {
+                    'tool_calls': [
+                      {
+                        'index': 0,
+                        'id': 'call_1',
+                        'type': 'function',
+                        'function': {'name': 'echo_probe', 'arguments': '{}'},
+                      },
+                    ],
+                  },
+                  'finish_reason': null,
+                },
+              ],
+            })}\n\n',
+          );
+          for (var i = 0; i < 8; i++) {
+            request.response.write(
+              'data: ${jsonEncode({
+                'choices': [
+                  {
+                    'index': 0,
+                    'delta': {'content': 'x' * (16 * 1024)},
+                    'finish_reason': null,
+                  },
+                ],
+              })}\n\n',
+            );
+          }
+          request.response.write(
+            'data: ${jsonEncode({
+              'choices': [
+                {
+                  'index': 0,
+                  'delta': {'content': 'x'},
+                  'finish_reason': null,
+                },
+              ],
+            })}\n\n',
+          );
+          await request.response.close();
+        });
+        final gateway = server.gateway();
+        final events = <ModelEvent>[];
 
-      await expectLater(
-        gateway.generate(_request(), _key()).toList(),
-        throwsA(_failure(AgentFailureCode.resourceLimit)),
-      );
-      await gateway.close();
-    });
+        await expectLater(
+          gateway
+              .generate(_request(tool), _key())
+              .listen(events.add)
+              .asFuture<void>(),
+          throwsA(_failure(AgentFailureCode.responseLengthLimit)),
+        );
+        expect(
+          events
+              .whereType<ModelTextDelta>()
+              .map((event) => event.text)
+              .join()
+              .length,
+          AgentText.maximumReplyCharacters,
+        );
+        expect(events.whereType<ModelCompleted>(), isEmpty);
+        await gateway.close();
+      },
+    );
 
     test('enforces per-call argument and tool-call count limits', () async {
       final tool = ModelToolDefinition(

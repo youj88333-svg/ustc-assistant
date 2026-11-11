@@ -22,6 +22,7 @@ final class CalendarWeekView extends StatelessWidget {
     required this.onSelectTask,
     required this.onOpenUnscheduledTasks,
     required this.onTaskOverflow,
+    this.compactPresentation = false,
   });
 
   final CalendarWindow window;
@@ -34,6 +35,7 @@ final class CalendarWeekView extends StatelessWidget {
   final ValueChanged<TaskRecord> onSelectTask;
   final VoidCallback onOpenUnscheduledTasks;
   final void Function(DateTime day, List<TaskRecord> tasks) onTaskOverflow;
+  final bool compactPresentation;
 
   static const double _timeGutter = 62;
   static const double _minimumDayWidth = 124;
@@ -66,7 +68,9 @@ final class CalendarWeekView extends StatelessWidget {
         // through the bands without squeezing away their 48dp actions.
         final availableHeight = math.max(240.0, viewportHeight);
         final mobile = isPhoneWorkspace(context) || availableWidth < 620;
-        final textScale = MediaQuery.textScalerOf(context).scale(1);
+        final textScaler = MediaQuery.textScalerOf(context);
+        final textScale = textScaler.scale(1);
+        final axisLabelScale = textScaler.scale(9) / 9;
         final gutterWidth = mobile
             ? _mobileTimeGutter(availableWidth)
             : _timeGutter;
@@ -78,7 +82,12 @@ final class CalendarWeekView extends StatelessWidget {
         final contentWidth = math.max(boardWidth, availableWidth).toDouble();
         final dayWidth = (contentWidth - gutterWidth) / days.length;
         final headingHeight = mobile
-            ? math.max(52.0, 30.0 * textScale.clamp(1.0, 2.0)).toDouble()
+            ? math
+                  .max(
+                    compactPresentation ? 48.0 : 52.0,
+                    30.0 * textScale.clamp(1.0, 2.0),
+                  )
+                  .toDouble()
             : _headingHeight;
         final allDay = _segmentsByDay(days, allDay: true);
         final earlyMorning = _segmentsByDay(days, earlyMorning: true);
@@ -140,7 +149,11 @@ final class CalendarWeekView extends StatelessWidget {
             .toDouble();
         final axis = CalendarTeachingAxis.fit(
           axisAvailable,
-          textScale: mobile ? math.max(2.0, textScale) : textScale,
+          textScale: mobile && !compactPresentation
+              ? math.max(2.0, textScale)
+              : compactPresentation && mobile
+              ? axisLabelScale
+              : textScale,
         );
 
         return SingleChildScrollView(

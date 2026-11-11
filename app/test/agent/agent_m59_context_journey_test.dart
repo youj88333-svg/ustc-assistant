@@ -839,7 +839,7 @@ void main() {
       const historySummaryMarker = 'M59-DURABLE-HISTORY-SUMMARY:';
       const currentQuestion = '读取选中任务并核对今天安排、冲突和空档';
       final contextBudget = AgentContextBudget(
-        maximumInputTokens: 16000,
+        maximumInputTokens: 16250,
         softFraction: 0.999,
       );
       final rig = await _open(
@@ -880,14 +880,9 @@ void main() {
       expect(persistedBefore.summary, durableSummary);
 
       final policy = await rig.store.agent.readAgentUsePolicy();
-      final beijing = _now.add(const Duration(hours: 8));
-      final receivedAt =
-          '${beijing.toIso8601String().replaceFirst(RegExp(r'Z$'), '')}+08:00';
       final systemMessage = ModelChatMessage(
         role: 'system',
         content: buildAgentSystemPrompt(
-          day: beijing.toIso8601String().substring(0, 10),
-          receivedAt: receivedAt,
           definitions: rig.definitions,
           personalContentAllowed: policy.personalContentAllowed,
         ),
@@ -899,11 +894,10 @@ void main() {
       const selectedTaskContext =
           '用户从任务页选中 task_ref=r_0123456789abcdef0123456789abcdef；'
           '先用read_task核对详情。此选择不是批准。';
-      final selectedCurrentQuestion = ModelChatMessage(
-        role: 'user',
-        content:
-            '$currentQuestion\n[应用选择，只是当前讨论对象，不是批准] '
-            '$selectedTaskContext',
+      final selectedCurrentQuestion = buildAgentUserMessage(
+        currentQuestion,
+        _now,
+        applicationSelection: selectedTaskContext,
       );
       final historicalGroups = buildAgentConversationGroups(persistedBefore);
       expect(historicalGroups, hasLength(1));
@@ -1548,7 +1542,12 @@ void _expectUserContent(ModelRequest request, String originalText) {
   );
 }
 
-String _lastUserContent(ModelRequest request) => _userContents(request).last;
+String _lastUserContent(ModelRequest request) =>
+    _withoutTimeHeader(_userContents(request).last);
+
+String _withoutTimeHeader(String text) => text.startsWith('[用户消息收到时间（北京时间）：')
+    ? text.substring(text.indexOf('\n') + 1)
+    : text;
 
 String _requestText(ModelRequest request) => request.messages
     .where((message) => message.content != null)
@@ -1977,7 +1976,9 @@ final class _A7UndoLoopbackService {
     expect(_systemContent(body), isNot(contains('【应用本轮参数校验】')));
     expect(
       messages.any(
-        (message) => message['role'] == 'user' && message['content'] == content,
+        (message) =>
+            message['role'] == 'user' &&
+            _withoutTimeHeader(message['content'] as String) == content,
       ),
       isTrue,
     );

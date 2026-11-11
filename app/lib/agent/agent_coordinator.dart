@@ -115,17 +115,21 @@ final class AgentCoordinator {
   final AppClock clock;
   final Duration runTimeout;
   final AgentContextBudget? contextBudget;
-  AgentContextBudget get _limits =>
-      contextBudget ??
-      AgentContextBudget(
-        maximumInputTokens: _usePolicy.contextOptions.inputTokens,
-        maximumOutputTokens: _usePolicy.contextOptions.outputTokens,
-        maximumModelCalls: _usePolicy.contextOptions.modelCalls,
-        maximumToolCalls: _usePolicy.contextOptions.toolCalls,
-        activeTimeout: Duration(
-          seconds: _usePolicy.contextOptions.activeSeconds,
-        ),
-      );
+  AgentContextBudget get _limits {
+    if (contextBudget != null) return contextBudget!;
+    final options = _usePolicy.contextOptions;
+    return AgentContextBudget(
+      maximumInputTokens: min(
+        options.inputTokens,
+        AgentContextOptions.maximumInputTokens - options.outputTokens,
+      ),
+      maximumOutputTokens: options.outputTokens,
+      maximumModelCalls: options.modelCalls,
+      maximumToolCalls: options.toolCalls,
+      activeTimeout: Duration(seconds: options.activeSeconds),
+    );
+  }
+
   AgentUsePolicySnapshot _usePolicy = AgentUsePolicySnapshot();
   int? _runPolicyRevision;
   bool _adviceOnly = false;
@@ -176,6 +180,7 @@ final class AgentCoordinator {
   String? _discussionId, _discussionDraft;
   bool _historyExhausted = false;
   bool _contextCompacted = false, _rememberApproval = false;
+  (String, int, AgentAuthority, int)? _failedAutomaticCompaction;
   String? _loadedConversation;
   Completer<_ApprovalDecision>? _approvalDecision;
   StreamSubscription<void>? _interactiveSubscription;
@@ -431,7 +436,16 @@ final class AgentCoordinator {
                 completed.finishReason == 'tool_calls'
             ? DiagnosticOutcome.complete
             : DiagnosticOutcome.interrupted,
+        code: completed.finishReason == 'length'
+            ? DiagnosticCode.responseLengthLimit
+            : null,
         elapsedMilliseconds: elapsed.elapsedMilliseconds,
+        context: DiagnosticContextMetadata(
+          outputReserve: request.maxTokens,
+          actualInputTokens: _diagnosticTokenCount(completed.inputTokens),
+          actualOutputTokens: _diagnosticTokenCount(completed.outputTokens),
+          cachedInputTokens: _diagnosticTokenCount(completed.cachedInputTokens),
+        ),
       );
       terminalLogged = true;
     } catch (e) {
@@ -1328,23 +1342,18 @@ final class AgentCoordinator {
         .map((image) => AgentImage(image.bytes))
         .toList();
     final receivedAtUtc = clock.nowUtc;
-    final beijing = receivedAtUtc.add(const Duration(hours: 8));
-    final day = beijing.toIso8601String().substring(0, 10);
-    final receivedAt =
-        '${beijing.toIso8601String().replaceFirst(RegExp(r'Z$'), '')}+08:00';
     final system = ModelChatMessage(
       role: 'system',
       content: buildAgentSystemPrompt(
-        day: day,
-        receivedAt: receivedAt,
         definitions: definitions,
         personalContentAllowed: _usePolicy.personalContentAllowed,
         adviceOnly: _adviceOnly,
       ),
     );
-    final currentUser = ModelChatMessage(
-      role: 'user',
-      content: text,
+    final estimatedUser = buildAgentUserMessage(
+      text,
+      receivedAtUtc,
+      imageCount: attachments.length,
       images: attachments,
     );
     List<List<ModelChatMessage>> groups() =>
@@ -1372,13 +1381,14 @@ final class AgentCoordinator {
       system,
       ?summary,
       for (final group in historyGroups) ...group,
-      currentUser,
+      estimatedUser,
     ], definitions);
     // Auto compaction precedes beginRun so its issued snapshot can be saved
     // atomically without racing an active assistant turn.
     if (snapshot != null &&
         limits.shouldCompact(estimate) &&
-        historyGroups.length > 1) {
+        historyGroups.length > 1 &&
+        _canAutoCompact(snapshot, settings.authority)) {
       try {
         final compacted = await _generateContextSummary(snapshot, settings, g);
         _current(g);
@@ -1392,6 +1402,7 @@ final class AgentCoordinator {
         historyGroups = groups();
         summary = summaryMessage();
         _contextCompacted = true;
+        _failedAutomaticCompaction = null;
         _log(
           DiagnosticEventName.agentContextCompacted,
           stage: DiagnosticStage.history,
@@ -1404,6 +1415,12 @@ final class AgentCoordinator {
           ),
         );
       } on AgentFailure catch (failure) {
+        _failedAutomaticCompaction = (
+          snapshot!.conversationId,
+          snapshot.revision,
+          settings.authority,
+          snapshot.lastMessageId,
+        );
         if (const {
           AgentFailureCode.cancelled,
           AgentFailureCode.staleContext,
@@ -1455,7 +1472,15 @@ final class AgentCoordinator {
     var savedLength = 0;
     var lastSave = clock.nowUtc;
     final transcript = <ModelChatMessage>[];
-    var modelTurn = <ModelChatMessage>[currentUser];
+    ModelChatMessage currentUser({String selection = ''}) =>
+        buildAgentUserMessage(
+          text,
+          ticket.receivedAtUtc ?? receivedAtUtc,
+          imageCount: attachments.length,
+          images: attachments,
+          applicationSelection: selection,
+        );
+    var modelTurn = <ModelChatMessage>[currentUser()];
     var personal = snapshot?.includesPersonalContent ?? false;
     final budget = _AgentRunBudget(
       runTimeout != const Duration(seconds: 300)
@@ -1502,11 +1527,7 @@ final class AgentCoordinator {
         final selected = await (selector as AgentDiscussionToolSession)
             .selectForDiscussion(selection);
         _runSelection = selected;
-        modelTurn[0] = ModelChatMessage(
-          role: 'user',
-          content: '$text\n[应用选择，只是当前讨论对象，不是批准] $selected',
-          images: attachments,
-        );
+        modelTurn[0] = currentUser(selection: selected);
       }
       _interactiveSubscription = _interactive?.interactiveChanges.listen((_) {
         if (_stopping || g != _generation) return;
@@ -1530,13 +1551,14 @@ final class AgentCoordinator {
       final repeatCounts = <String, int>{};
       final committedResults = <String, AgentToolResult>{};
       final declinedSourceRefreshes = <_RefreshSource>{};
-      final callIds = <String>{
+      final wireCallIds = <String>{
         for (final group in historyGroups)
           for (final message in group)
             for (final call in message.toolCalls) call.id,
       };
+      final callIds = <String>{};
+      var callOrdinal = 0;
       var invalidStreak = 0;
-      var runCompactions = 0;
       var serviceCapacityRetried = false;
       var serviceInputLimit = limits.maximumInputTokens;
       var finalStatus = AgentMessageStatus.interrupted;
@@ -1568,36 +1590,18 @@ final class AgentCoordinator {
           fixedMessages: fixed,
           tools: definitions,
         );
-        if (fit.fixedOverflow && modelTurn.length > 3) {
-          // Compact only completed protocol groups. The full durable prefix and
-          // actual mutation receipts remain; this never reruns any old tool.
+        if (fit.fixedOverflow && modelTurn.length > 1) {
+          // Fit complete tool exchanges locally. An additional summarizer
+          // request here would delay the reply and consume another model call.
           final turnGroups = _completeModelGroups(modelTurn.skip(1).toList());
-          final keep = turnGroups.length > 2
-              ? turnGroups.sublist(turnGroups.length - 2)
-              : turnGroups;
-          String? turnSummary;
-          if (runCompactions++ == 0) {
-            try {
-              turnSummary = await _summarizeModelGroups(
-                turnGroups,
-                settings,
-                g,
-              );
-            } on AgentFailure catch (failure) {
-              if (failure.code == AgentFailureCode.cancelled ||
-                  failure.code == AgentFailureCode.staleContext) {
-                rethrow;
-              }
-            }
-          }
+          final fittedTurn = activeLimits.trimCompleteGroups(
+            turnGroups,
+            fixedMessages: [currentSystem, modelTurn.first, ?sourceDecision],
+            tools: definitions,
+          );
           modelTurn = [
             modelTurn.first,
-            if (turnSummary != null)
-              ModelChatMessage(
-                role: 'assistant',
-                content: '[本轮已完成步骤摘要，不是新的授权或执行]\n$turnSummary',
-              ),
-            for (final group in keep) ...group,
+            for (final group in fittedTurn.retainedGroups) ...group,
           ];
           fixed = [currentSystem, ...modelTurn, ?sourceDecision];
           fit = activeLimits.trimCompleteGroups(
@@ -1609,19 +1613,15 @@ final class AgentCoordinator {
             DiagnosticEventName.agentContextTrimmed,
             stage: DiagnosticStage.history,
             outcome: DiagnosticOutcome.truncated,
-            count: turnGroups.length - keep.length,
+            count: fittedTurn.removedGroupCount,
             context: _contextDiagnostic(
               DiagnosticContextDecision.wholeTurnTrim,
-              removedGroups: turnGroups.length - keep.length,
+              removedGroups: fittedTurn.removedGroupCount,
             ),
           );
         }
         if (fit.fixedOverflow) {
-          throw AgentFailure(
-            serviceCapacityRetried
-                ? AgentFailureCode.contextLimit
-                : AgentFailureCode.resourceLimit,
-          );
+          throw const AgentFailure(AgentFailureCode.contextLimit);
         }
         historyGroups = fit.retainedGroups;
         if (fit.removedGroupCount > 0) {
@@ -1674,7 +1674,9 @@ final class AgentCoordinator {
           _phase = AgentPhase.generating;
           _activeTool = null;
           _publish();
-          await for (final event in _modelEvents(request, secret, g)) {
+          await for (final event in _batchModelDeltas(
+            _modelEvents(request, secret, g),
+          )) {
             await _validateRun(ticket, g);
             switch (event) {
               case ModelReasoningDelta():
@@ -1687,11 +1689,19 @@ final class AgentCoordinator {
               case ModelTextDelta():
                 _finishReasoning(ticket.assistantMessageId);
                 final candidate = '$_liveText${event.text}';
-                AgentText.requireSafe(candidate);
+                if (candidate.length > AgentText.maximumReplyCharacters) {
+                  throw const AgentFailure(
+                    AgentFailureCode.responseLengthLimit,
+                  );
+                }
+                AgentText.requireSafe(
+                  candidate,
+                  maxCharacters: AgentText.maximumReplyCharacters,
+                );
                 _liveText = candidate;
                 roundText += event.text;
                 _showLive(_liveText);
-                if (_liveText.length - savedLength >= 512 ||
+                if (savedLength == 0 ||
                     clock.nowUtc.difference(lastSave) >=
                         const Duration(milliseconds: 500)) {
                   await data.saveAssistant(ticket, _liveText);
@@ -1714,7 +1724,10 @@ final class AgentCoordinator {
           if (failure.code == AgentFailureCode.contextLimit &&
               !serviceCapacityRetried &&
               completed == null &&
+              firstReasoningDelta &&
               roundText.isEmpty &&
+              attachments.isEmpty &&
+              (historyGroups.isNotEmpty || modelTurn.length > 1) &&
               fit.estimate.estimatedInputTokens > 4096) {
             serviceCapacityRetried = true;
             serviceInputLimit = max(
@@ -1746,6 +1759,9 @@ final class AgentCoordinator {
         await _validateRun(ticket, g);
         if (completed == null) {
           throw const AgentFailure(AgentFailureCode.protocol);
+        }
+        if (completed.finishReason == 'length') {
+          throw const AgentFailure(AgentFailureCode.responseLengthLimit);
         }
         if (completed.toolCalls.isEmpty) {
           if (roundText.trim().isEmpty) {
@@ -1794,20 +1810,35 @@ final class AgentCoordinator {
         _liveText = textBeforeRound;
         await data.saveAssistant(ticket, _liveText);
         _showLive(_liveText);
-        final assistantCall = ModelChatMessage(
-          role: 'assistant',
-          content: roundText.isEmpty ? null : roundText,
-          toolCalls: completed.toolCalls,
-        );
-        transcript.add(assistantCall);
-        modelTurn.add(assistantCall);
+        final wireCalls = <ModelToolCall>[];
         for (final call in completed.toolCalls) {
-          await _validateRun(ticket, g);
           AgentText.requireSafe(call.argumentsJson, maxCharacters: 16384);
           if (!modelToolCallIdPattern.hasMatch(call.id) ||
               !callIds.add(call.id)) {
             throw const AgentFailure(AgentFailureCode.protocol);
           }
+          wireCalls.add(
+            ModelToolCall(
+              id: agentWireToolCallId(
+                call.id,
+                wireCallIds,
+                ticket.assistantMessageId,
+                callOrdinal++,
+              ),
+              name: call.name,
+              argumentsJson: call.argumentsJson,
+            ),
+          );
+        }
+        final assistantCall = ModelChatMessage(
+          role: 'assistant',
+          content: roundText.isEmpty ? null : roundText,
+          toolCalls: wireCalls,
+        );
+        transcript.add(assistantCall);
+        modelTurn.add(assistantCall);
+        for (final call in wireCalls) {
+          await _validateRun(ticket, g);
           final signature = _canonicalCall(call);
           final refreshSource = _sourceRefreshName(call);
           final repetitions = (repeatCounts[signature] ?? 0) + 1;
@@ -2128,6 +2159,9 @@ final class AgentCoordinator {
     }
   }
 
+  static int? _diagnosticTokenCount(int? value) =>
+      value != null && value >= 0 && value <= 1000000 ? value : null;
+
   Future<void> _persistConversationTurn(
     AgentRunTicket ticket,
     int g,
@@ -2278,6 +2312,7 @@ final class AgentCoordinator {
         );
         _current(g);
         _contextCompacted = true;
+        _failedAutomaticCompaction = null;
         _log(
           DiagnosticEventName.agentContextCompacted,
           stage: DiagnosticStage.history,
@@ -2285,6 +2320,18 @@ final class AgentCoordinator {
           count: snapshot.messages.length,
         );
       });
+
+  bool _canAutoCompact(
+    AgentConversationContext snapshot,
+    AgentAuthority authority,
+  ) {
+    final failed = _failedAutomaticCompaction;
+    return failed == null ||
+        failed.$1 != snapshot.conversationId ||
+        failed.$2 != snapshot.revision ||
+        failed.$3.configRevision != authority.configRevision ||
+        snapshot.lastMessageId - failed.$4 >= 4;
+  }
 
   Future<String> _generateContextSummary(
     AgentConversationContext snapshot,
@@ -2340,18 +2387,10 @@ final class AgentCoordinator {
             },
         ],
     ]);
-    final selected = List<List<ModelChatMessage>>.of(groups);
-    var input = encode(selected);
-    while (_limits.estimateMessages([
-              system,
-              ModelChatMessage(role: 'user', content: input),
-            ], []).estimatedInputTokens >
-            _limits.maximumInputTokens &&
-        selected.length > 1) {
-      selected.removeAt(0);
-      input = encode(selected);
-    }
-    if (selected.isEmpty ||
+    final input = encode(groups);
+    // The stored summary marks this snapshot covered. Do not drop some of its
+    // turns during summary generation and then mark them as summarized.
+    if (groups.isEmpty ||
         _limits.estimateMessages([
               system,
               ModelChatMessage(role: 'user', content: input),
@@ -2359,7 +2398,7 @@ final class AgentCoordinator {
             _limits.maximumInputTokens) {
       throw const AgentFailure(AgentFailureCode.resourceLimit);
     }
-    AgentText.requireSafe(input, maxCharacters: 192 * 1024);
+    AgentText.requireSafe(input, maxCharacters: 512 * 1024);
     _current(g);
     final policy = data;
     final expectedPolicy = _usePolicy;
@@ -2394,7 +2433,7 @@ final class AgentCoordinator {
       _publish();
       final request = ModelRequest(
         modelId: settings.modelId!,
-        maxTokens: min(2048, _limits.maximumOutputTokens),
+        maxTokens: min(8192, _limits.maximumOutputTokens),
         messages: [
           system,
           ModelChatMessage(role: 'user', content: input),
@@ -2413,6 +2452,9 @@ final class AgentCoordinator {
           completed = event;
           _accumulateUsage(event);
         }
+      }
+      if (completed?.finishReason == 'length') {
+        throw const AgentFailure(AgentFailureCode.responseLengthLimit);
       }
       if (completed?.finishReason != 'stop' ||
           completed!.toolCalls.isNotEmpty ||
@@ -2889,6 +2931,73 @@ final class AgentCoordinator {
       'cost': 'unknown',
     },
   });
+}
+
+/// Coalesce adjacent text fragments before database/authority checks and UI
+/// delivery. Tool and terminal events always follow the preceding fragments.
+Stream<ModelEvent> _batchModelDeltas(Stream<ModelEvent> events) {
+  late final StreamController<ModelEvent> controller;
+  StreamSubscription<ModelEvent>? subscription;
+  Timer? timer;
+  final buffer = StringBuffer();
+  var reasoning = false;
+
+  void flush() {
+    timer?.cancel();
+    timer = null;
+    if (buffer.isEmpty) return;
+    final text = buffer.toString();
+    buffer.clear();
+    controller.add(
+      reasoning ? ModelReasoningDelta(text) : ModelTextDelta(text),
+    );
+  }
+
+  void addDelta(String text, {required bool isReasoning}) {
+    if (text.isEmpty) return;
+    if (reasoning != isReasoning) flush();
+    reasoning = isReasoning;
+    buffer.write(text);
+    if (buffer.length >= 4096) {
+      flush();
+    } else {
+      timer ??= Timer(const Duration(milliseconds: 40), flush);
+    }
+  }
+
+  controller = StreamController<ModelEvent>(
+    onListen: () {
+      subscription = events.listen(
+        (event) {
+          switch (event) {
+            case ModelTextDelta():
+              addDelta(event.text, isReasoning: false);
+            case ModelReasoningDelta():
+              addDelta(event.text, isReasoning: true);
+            case ModelCompleted():
+              flush();
+              controller.add(event);
+          }
+        },
+        onError: (Object error, StackTrace stack) {
+          flush();
+          controller.addError(error, stack);
+        },
+        onDone: () {
+          flush();
+          unawaited(controller.close());
+        },
+      );
+    },
+    onPause: () => subscription?.pause(),
+    onResume: () => subscription?.resume(),
+    onCancel: () async {
+      timer?.cancel();
+      buffer.clear();
+      await subscription?.cancel();
+    },
+  );
+  return controller.stream;
 }
 
 /// Configuration/history work gets its own trace, even when an inactive chat

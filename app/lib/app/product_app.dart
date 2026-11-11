@@ -30,6 +30,7 @@ final class ProductApp extends StatelessWidget {
     this.onDestinationChanged,
     this.scaffoldMessengerKey,
     this.logsActionBuilder,
+    this.compactPhoneChrome = false,
     this.home,
   });
 
@@ -41,6 +42,7 @@ final class ProductApp extends StatelessWidget {
   final ValueChanged<ShellDestination>? onDestinationChanged;
   final GlobalKey<ScaffoldMessengerState>? scaffoldMessengerKey;
   final WidgetBuilder? logsActionBuilder;
+  final bool compactPhoneChrome;
   final Widget? home;
 
   @override
@@ -94,6 +96,7 @@ final class ProductApp extends StatelessWidget {
           destination: destination,
           onDestinationChanged: onDestinationChanged,
           logsActionBuilder: logsActionBuilder,
+          compactPhoneChrome: compactPhoneChrome,
         ),
   );
 }
@@ -232,6 +235,7 @@ final class _ProductShell extends StatefulWidget {
     this.destination,
     this.onDestinationChanged,
     this.logsActionBuilder,
+    required this.compactPhoneChrome,
   });
 
   final AppShellPort controller;
@@ -241,6 +245,7 @@ final class _ProductShell extends StatefulWidget {
   final ValueListenable<ShellDestination>? destination;
   final ValueChanged<ShellDestination>? onDestinationChanged;
   final WidgetBuilder? logsActionBuilder;
+  final bool compactPhoneChrome;
 
   @override
   State<_ProductShell> createState() => _ProductShellState();
@@ -324,9 +329,14 @@ final class _ProductShellState extends State<_ProductShell> {
         final width = constraints.maxWidth;
         final narrow = width < 760;
         final phone = isPhoneWorkspace(context);
+        final compactPhone = phone && widget.compactPhoneChrome;
         final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
         final wide = width >= 1100;
         final destination = _destination;
+        final hidePhoneHeader =
+            phone &&
+            (keyboardOpen ||
+                (compactPhone && destination != ShellDestination.settings));
         final calendarCanvas =
             destination == ShellDestination.agenda &&
             widget.agendaBuilder != null;
@@ -348,26 +358,28 @@ final class _ProductShellState extends State<_ProductShell> {
           },
           child: Scaffold(
             backgroundColor: _canvas,
-            appBar: phone && keyboardOpen
+            appBar: hidePhoneHeader
                 ? null
                 : phone
                 ? AppBar(
-                    toolbarHeight: 48,
+                    toolbarHeight: compactPhone ? 44 : 48,
                     leading: destination == ShellDestination.settings
                         ? BackButton(
                             onPressed: () =>
                                 _selectDestination(_previousMainDestination),
                           )
                         : null,
-                    title: Text(
-                      'USTC Assistant',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
+                    title: compactPhone
+                        ? null
+                        : const Text(
+                            'USTC Assistant',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                     actions: [
                       if (widget.logsActionBuilder != null)
                         widget.logsActionBuilder!(context),
@@ -417,7 +429,7 @@ final class _ProductShellState extends State<_ProductShell> {
                     destination != ShellDestination.settings
                 ? NavigationBar(
                     key: const ValueKey('shell-phone-navigation'),
-                    height: 64,
+                    height: compactPhone ? 56 : 64,
                     selectedIndex: destination == ShellDestination.agenda
                         ? 1
                         : 0,
@@ -441,7 +453,7 @@ final class _ProductShellState extends State<_ProductShell> {
                   )
                 : null,
             body: SafeArea(
-              top: !narrow || (phone && keyboardOpen),
+              top: !narrow || hidePhoneHeader,
               child: Row(
                 children: [
                   if (!narrow && !phone)
@@ -455,22 +467,30 @@ final class _ProductShellState extends State<_ProductShell> {
                   Expanded(
                     child: Padding(
                       padding: EdgeInsets.fromLTRB(
-                        calendarCanvas
+                        calendarCanvas && compactPhone
+                            ? 8
+                            : calendarCanvas
                             ? 12
                             : narrow
                             ? 8
                             : 24,
-                        calendarCanvas
+                        calendarCanvas && compactPhone
+                            ? 2
+                            : calendarCanvas
                             ? 8
                             : narrow
                             ? 4
                             : 16,
-                        calendarCanvas
+                        calendarCanvas && compactPhone
+                            ? 8
+                            : calendarCanvas
                             ? 12
                             : narrow
                             ? 8
                             : 24,
-                        calendarCanvas
+                        calendarCanvas && compactPhone
+                            ? 4
+                            : calendarCanvas
                             ? 12
                             : narrow
                             ? 4
@@ -481,11 +501,15 @@ final class _ProductShellState extends State<_ProductShell> {
                         children: [
                           WorkspaceVisibility(
                             active: destination == ShellDestination.agent,
-                            child: ExcludeFocus(
-                              excluding: destination != ShellDestination.agent,
-                              child:
-                                  widget.agentBuilder?.call(context) ??
-                                  _buildAgentPage(context),
+                            child: TickerMode(
+                              enabled: destination == ShellDestination.agent,
+                              child: ExcludeFocus(
+                                excluding:
+                                    destination != ShellDestination.agent,
+                                child:
+                                    widget.agentBuilder?.call(context) ??
+                                    _buildAgentPage(context),
+                              ),
                             ),
                           ),
                           if (destination != ShellDestination.agent)

@@ -92,7 +92,7 @@ void main() {
         ModelCompleted(finishReason: 'length'),
       ]);
       await coordinator.send('/compact');
-      expect(coordinator.view.failure, AgentFailureCode.protocol);
+      expect(coordinator.view.failure, AgentFailureCode.responseLengthLimit);
       expect(
         (await (store.agent as AgentConversationControlPort)
                 .readConversationContext())
@@ -246,7 +246,7 @@ void main() {
         ),
         isTrue,
       );
-      expect(resumedRequest.messages.last.content, '继续处理保留的内容');
+      expect(resumedRequest.messages.last.content, endsWith('\n继续处理保留的内容'));
       final afterResume = await (store.agent as AgentConversationControlPort)
           .readConversationContext();
       expect(afterResume.summary, before.summary);
@@ -377,10 +377,7 @@ void main() {
       final coordinator = await _coordinator(
         store,
         gateway,
-        contextBudget: AgentContextBudget(
-          maximumInputTokens: 4096,
-          softFraction: 0.75,
-        ),
+        contextBudget: AgentContextBudget(maximumInputTokens: 6000),
       );
       const currentQuestion = 'current-question-after-auto-timeout';
 
@@ -394,7 +391,8 @@ void main() {
       expect(
         request.messages.any(
           (message) =>
-              message.role == 'user' && message.content == currentQuestion,
+              message.role == 'user' &&
+              (message.content ?? '').endsWith('\n$currentQuestion'),
         ),
         isTrue,
       );
@@ -488,7 +486,7 @@ void main() {
         contains('收到时间（北京时间）：2026-10-13 16:00:00.000'),
       );
       expect(request.messages.last.role, 'user');
-      expect(request.messages.last.content, '对的');
+      expect(request.messages.last.content, endsWith('\n对的'));
       expect(
         request.messages.any(
           (message) =>

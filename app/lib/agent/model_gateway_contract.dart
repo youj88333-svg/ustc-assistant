@@ -85,11 +85,12 @@ final class ModelCompleted extends ModelEvent {
     required this.finishReason,
     List<ModelToolCall> toolCalls = const [],
     this.inputTokens,
+    this.cachedInputTokens,
     this.outputTokens,
   }) : toolCalls = List.unmodifiable(toolCalls);
   final String finishReason;
   final List<ModelToolCall> toolCalls;
-  final int? inputTokens, outputTokens;
+  final int? inputTokens, cachedInputTokens, outputTokens;
 }
 
 abstract interface class ModelGatewayPort {

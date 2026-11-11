@@ -3,6 +3,8 @@ import 'agent_contract.dart';
 /// Conservative preflight; ordinary text stays usable, identifiable secrets do
 /// not become durable conversation content. This is not a universal detector.
 abstract final class AgentText {
+  static const maximumReplyCharacters = 128 * 1024;
+
   static final _secret = RegExp(
     r'\bsk-[A-Za-z0-9_-]{8,}|\bBearer\s+\S{6,}|\b(?:api[_ -]?key|token|password)\s*[:=]\s*\S{4,}|(?:密码|口令|密钥)\s*[:：=]\s*\S{3,}',
     caseSensitive: false,

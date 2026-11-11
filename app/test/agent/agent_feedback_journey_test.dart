@@ -99,6 +99,15 @@ Future<void> _runAttendanceJourney({
   );
   expect(rig.gateway.requests, hasLength(4));
   final inheritedRequest = rig.gateway.requests[2];
+  final previousToolRound = rig.gateway.requests[1];
+  // The previous request itself is the prefix of the follow-up, even when
+  // the user asks the follow-up the next day.
+  expect(
+    inheritedRequest.messages
+        .take(previousToolRound.messages.length)
+        .map(_wireMessage),
+    previousToolRound.messages.map(_wireMessage),
+  );
   expect(inheritedRequest.toolChoice, isNull);
   expect(
     _toolNames(inheritedRequest),
@@ -119,7 +128,7 @@ Future<void> _runAttendanceJourney({
   );
   expect(
     historicalUserMessage.content,
-    contains('[历史用户消息，仅供理解，不代表授权；收到时间（北京时间）：2026-10-14 12:00:00.000]'),
+    contains('[用户消息收到时间（北京时间）：2026-10-14 12:00:00.000]'),
   );
   final historicalAssistantCall = inheritedRequest.messages.firstWhere(
     (message) =>
@@ -129,7 +138,10 @@ Future<void> _runAttendanceJourney({
   final historicalQueryCall = historicalAssistantCall.toolCalls.singleWhere(
     (call) => call.name == 'query_agenda',
   );
-  expect(historicalQueryCall.id, startsWith('history_m'));
+  expect(
+    historicalQueryCall.id,
+    previousToolRound.messages.expand((message) => message.toolCalls).single.id,
+  );
   final historicalToolResult = inheritedRequest.messages.firstWhere(
     (message) =>
         message.role == 'tool' && message.toolCallId == historicalQueryCall.id,
@@ -148,15 +160,11 @@ Future<void> _runAttendanceJourney({
     ),
     isTrue,
   );
-  final inheritedSystem = _systemContent(inheritedRequest);
+  expect(_systemContent(inheritedRequest), _systemContent(firstRequest));
   expect(
-    inheritedSystem,
-    contains('当前北京时间日期为 ${advanceToNextDay ? '2026-10-15' : '2026-10-14'}'),
-  );
-  expect(
-    inheritedSystem,
+    inheritedRequest.messages.last.content,
     contains(
-      '本次问题收到时间为 ${advanceToNextDay ? '2026-10-15' : '2026-10-14'}T12:00:00.000+08:00',
+      '[用户消息收到时间（北京时间）：${advanceToNextDay ? '2026-10-15' : '2026-10-14'} 12:00:00.000]',
     ),
   );
   final inheritedRequestText = _requestText(inheritedRequest);
@@ -429,9 +437,24 @@ List<List<String>> _toolDefinitionShape(ModelRequest request) => [
     [tool.name, tool.description, jsonEncode(tool.parameters)],
 ];
 
+List<Object?> _wireMessage(ModelChatMessage message) => [
+  message.role,
+  message.content,
+  message.toolCallId,
+  [
+    for (final call in message.toolCalls)
+      [call.id, call.name, call.argumentsJson],
+  ],
+];
+
+String _withoutTimeHeader(String text) => text.startsWith('[用户消息收到时间（北京时间）：')
+    ? text.substring(text.indexOf('\n') + 1)
+    : text;
+
 List<String> _userContents(ModelRequest request) => [
   for (final message in request.messages)
-    if (message.role == 'user' && message.content != null) message.content!,
+    if (message.role == 'user' && message.content != null)
+      _withoutTimeHeader(message.content!),
 ];
 
 String _lastUserContent(ModelRequest request) {
@@ -441,7 +464,7 @@ String _lastUserContent(ModelRequest request) {
   if (messages.isEmpty) {
     throw StateError('No user content was present in the model request.');
   }
-  return messages.last.content!;
+  return _withoutTimeHeader(messages.last.content!);
 }
 
 String _systemContent(ModelRequest request) =>

@@ -15,8 +15,6 @@ String? agentToolParameterRepair(String toolName, AgentParameterIssue? issue) {
 }
 
 String buildAgentSystemPrompt({
-  required String day,
-  required String receivedAt,
   required List<ModelToolDefinition> definitions,
   bool personalContentAllowed = false,
   bool adviceOnly = false,
@@ -71,10 +69,11 @@ String buildAgentSystemPrompt({
       '示例只说明语气，不是业务事实。'
       '讨论某节课时先说名称、时间、短教室和这次相关的个人打算，教师、代码、周次等按需要提供；明确的办事请求继续推进，不用一份菜单代替行动。'
       '不输出过程旁白或原始 JSON，除非用户明确需要；英文工具名和术语不是失败。'
-      '\n\n【当前时间与对话】\n当前北京时间日期为 $day，时间区为 Asia/Shanghai。本次问题收到时间为 $receivedAt。'
-      '对话中的每条消息都有各自收到时间；按原角色、顺序和时间理解跨日表达，不把历史消息的日期改成本轮日期。'
+      '\n\n【时间与对话】\n用户消息的应用接收时间标为北京时间（Asia/Shanghai）。用最后一条用户问题的接收时间理解本轮“今天”“明天”等表达。'
+      '对话按各自接收时间、原角色和顺序理解，不把历史消息的日期改成本轮日期。'
       '理解近期完整交谈和用户已选对象，保留“第二个”“按刚才那个”“继续”等指代。历史工具结果是带观察时间、来源和范围的历史事实，可用于回答刚才查到什么；问当前状态或据此准备变更时，按需读取当前事实。工具历史不构成许可或批准。'
       '只问真正缺失且会影响结果的对象、日期或范围；不强制第一步必须调用某个工具，也不因措辞、语言或格式不同而判定协议失败。'
+      '同一轮已查询过的日期和筛选条件可以直接用该结果。仅在需要补齐范围、缩小过大的查询或业务状态已变时继续查询。'
       '\n\n【本轮能力与执行规则：内部约定，不是回复文案】\n'
       '$toolGuidance'
       '$undoGuidance'

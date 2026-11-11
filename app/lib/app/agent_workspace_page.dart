@@ -35,9 +35,9 @@ final class _AgentContextBudgetDraft {
   bool loaded = false;
   bool saving = false;
   bool saved = false;
-  int inputTokens = 16000;
+  int inputTokens = AgentContextOptions.defaultInputTokens;
   int formEpoch = 0;
-  String outputTokens = '2048';
+  String outputTokens = AgentContextOptions.defaultOutputTokens.toString();
   String modelCalls = '16';
   String toolCalls = '48';
   String activeSeconds = '300';
@@ -48,8 +48,17 @@ String _contextInputTokenLabel(int value) => switch (value) {
   16000 => '16,000 tokens',
   32000 => '32,000 tokens',
   64000 => '64,000 tokens',
+  AgentContextOptions.defaultInputTokens => '128 Ki tokens',
   _ => '$value tokens（当前配置）',
 };
+
+String _formatTokenCount(int value) => value.toString().replaceAllMapped(
+  RegExp(r'\B(?=(\d{3})+(?!\d))'),
+  (_) => ',',
+);
+
+String get _contextInputRange =>
+    '4,096–${_contextInputTokenLabel(AgentContextOptions.maximumInputTokens)}';
 
 /// The M5.1 chat surface. The workspace port is owned by its caller.
 final class AgentWorkspacePage extends StatefulWidget {
@@ -57,6 +66,8 @@ final class AgentWorkspacePage extends StatefulWidget {
     super.key,
     required this.controller,
     required this.onSettings,
+    this.onOpenSettings,
+    this.phoneKeyboardOpen = false,
     this.onModelValidation,
     this.pickImages,
     this.onOpenLocalEvidence,
@@ -71,6 +82,8 @@ final class AgentWorkspacePage extends StatefulWidget {
 
   final AgentWorkspacePort controller;
   final VoidCallback onSettings;
+  final VoidCallback? onOpenSettings;
+  final bool phoneKeyboardOpen;
   final VoidCallback? onModelValidation;
   final Future<List<AgentImage>> Function()? pickImages;
   final ValueChanged<AgentEvidence>? onOpenLocalEvidence;
@@ -1044,7 +1057,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                 parsedActiveSeconds == null) {
               setSheetState(() {
                 budget.failure =
-                    '请填写整数：输入估算 4,096–65,536、输出 1–8192、模型调用 1–64、工具调用 1–256、主动运行 1–3600 秒。';
+                    '请填写整数：输入估算 $_contextInputRange、输出 1–${_formatTokenCount(AgentContextOptions.maximumOutputTokens)}、模型调用 1–64、工具调用 1–256、主动运行 1–3600 秒。';
               });
               return null;
             }
@@ -1060,7 +1073,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
             } on AgentFailure {
               setSheetState(() {
                 budget.failure =
-                    '超出范围：输入估算 4,096–65,536、输出 1–8192、模型调用 1–64、工具调用 1–256、主动运行 1–3600 秒。';
+                    '超出范围：输入估算 $_contextInputRange、输出 1–${_formatTokenCount(AgentContextOptions.maximumOutputTokens)}、模型调用 1–64、工具调用 1–256、主动运行 1–3600 秒。';
               });
               return null;
             }
@@ -1107,6 +1120,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
             16000,
             32000,
             64000,
+            AgentContextOptions.defaultInputTokens,
             budget.inputTokens,
           }.toList()..sort();
           return Padding(
@@ -1183,11 +1197,14 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                           if (expanded) unawaited(loadContextOptions());
                         },
                         children: [
-                          const Align(
+                          Align(
                             alignment: Alignment.centerLeft,
                             child: Text(
-                              '建议输入估算 16,000；默认输出 2,048、模型调用 16 次、工具调用 48 次、主动运行 300 秒。配置值，模型容量未核验。',
-                              style: TextStyle(color: _agentMuted, height: 1.4),
+                              '输入估算只是偏好；应用会为输出预留 token，并可能按当前模型路由缩小有效输入预算。接近有效输入预算的 85% 时会整理较早对话。默认输入 128 Ki tokens、输出 ${_formatTokenCount(AgentContextOptions.defaultOutputTokens)} tokens；模型容量尚未核验。模型调用 16 次、工具调用 48 次、主动运行 300 秒。',
+                              style: const TextStyle(
+                                color: _agentMuted,
+                                height: 1.4,
+                              ),
                             ),
                           ),
                           const SizedBox(height: 8),
@@ -1849,7 +1866,11 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
       final morningDayKey = _beijingDayKey(morningNowUtc);
       final morningHiddenToday = _morningHiddenDay == morningDayKey;
       final phone = isPhoneWorkspace(context);
-      final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
+      // The shell owns this callback only for the compact iOS product surface.
+      final compactIos = phone && widget.onOpenSettings != null;
+      final keyboardOpen =
+          widget.phoneKeyboardOpen ||
+          MediaQuery.viewInsetsOf(context).bottom > 0;
       return Align(
         alignment: Alignment.topCenter,
         child: ConstrainedBox(
@@ -1860,17 +1881,31 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
               if (phone && !keyboardOpen)
                 Row(
                   children: [
-                    const Expanded(
-                      child: Text(
-                        'Agent',
-                        key: ValueKey('agent-page-title'),
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
+                    if (compactIos)
+                      if (status != null)
+                        Expanded(
+                          child: Text(
+                            status,
+                            key: const ValueKey('agent-phase'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(color: _agentMuted),
+                          ),
+                        )
+                      else
+                        const Spacer()
+                    else
+                      const Expanded(
+                        child: Text(
+                          'Agent',
+                          key: ValueKey('agent-page-title'),
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
-                    ),
-                    if (status != null)
+                    if (!compactIos && status != null)
                       Flexible(
                         child: Text(
                           status,
@@ -1886,19 +1921,32 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                       IconButton(
                         key: const ValueKey('morning-brief-restore'),
                         tooltip: '恢复今日晨报',
+                        constraints: compactIos
+                            ? const BoxConstraints(minWidth: 44, minHeight: 44)
+                            : null,
                         onPressed: _restoreMorningToday,
                         icon: const Icon(Icons.wb_twilight_outlined),
                       ),
                     IconButton(
                       key: const ValueKey('agent-settings-open'),
                       tooltip: 'Agent 设置与使用权限',
-                      constraints: const BoxConstraints(
-                        minWidth: 48,
-                        minHeight: 48,
-                      ),
+                      constraints: compactIos
+                          ? const BoxConstraints(minWidth: 44, minHeight: 44)
+                          : const BoxConstraints(minWidth: 48, minHeight: 48),
                       onPressed: () => unawaited(_openUsePolicySettings()),
                       icon: const Icon(Icons.tune_rounded),
                     ),
+                    if (compactIos)
+                      IconButton(
+                        key: const ValueKey('shell-nav-settings'),
+                        tooltip: '设置',
+                        constraints: const BoxConstraints(
+                          minWidth: 44,
+                          minHeight: 44,
+                        ),
+                        onPressed: widget.onOpenSettings,
+                        icon: const Icon(Icons.settings_outlined),
+                      ),
                   ],
                 ),
               if (!phone)
@@ -1969,7 +2017,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                       message:
                           view.failure == AgentFailureCode.invalidInput &&
                               view.parameterIssue != null
-                          ? '模型生成的操作参数未能通过检查：${view.parameterIssue!.userMessage}请重新发送要求；也可导出日志帮助排查。'
+                          ? '模型生成的操作参数未能通过检查：${view.parameterIssue!.userMessage}请重新发送要求；也可在设置中导出日志帮助排查。'
                           : _message ?? _failureText(view.failure!),
                       isError:
                           _messageIsError ||
@@ -1977,7 +2025,9 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                     ),
                   ),
                 ),
-                if (widget.diagnostics != null && view.failure != null)
+                if (!compactIos &&
+                    widget.diagnostics != null &&
+                    view.failure != null)
                   Align(
                     alignment: Alignment.centerRight,
                     child: DiagnosticsExportButton(
@@ -2126,7 +2176,11 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
             Expanded(
               child: view.conversationId == null
                   ? _emptyConversation(configured)
-                  : _messages(view),
+                  : _messages(
+                      view,
+                      compactAssistantLabel:
+                          phone && widget.onOpenSettings != null,
+                    ),
             ),
             const SizedBox(height: 8),
             if (phone && view.pendingAction != null)
@@ -2220,7 +2274,10 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     });
   }
 
-  Widget _messages(AgentWorkspaceView view) {
+  Widget _messages(
+    AgentWorkspaceView view, {
+    required bool compactAssistantLabel,
+  }) {
     _scheduleMessageFollow();
     final prefix = <Widget>[
       if (view.historyTruncated)
@@ -2296,6 +2353,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
             padding: const EdgeInsets.only(bottom: 24),
             child: _MessageBubble(
               message: message,
+              compactAssistantLabel: compactAssistantLabel,
               reasoning: view.reasoningByMessage[message.id],
               isCurrentAnswerEvidence: isCurrentAnswerEvidence,
               queryDetailsKey: detailsKey,
@@ -2507,7 +2565,9 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
               ],
             ),
             const SizedBox(height: 4),
-            if (!phone || MediaQuery.viewInsetsOf(context).bottom == 0)
+            if (!phone ||
+                (!widget.phoneKeyboardOpen &&
+                    MediaQuery.viewInsetsOf(context).bottom == 0))
               Text(
                 phone
                     ? '/compact 整理上下文 · /clear 清空聊天'
@@ -3257,6 +3317,7 @@ String _markEvidenceReferences(String text, List<AgentEvidence> evidence) {
 final class _MessageBubble extends StatelessWidget {
   const _MessageBubble({
     required this.message,
+    required this.compactAssistantLabel,
     required this.isCurrentAnswerEvidence,
     required this.queryDetailsKey,
     required this.queryDetailsExpanded,
@@ -3268,6 +3329,7 @@ final class _MessageBubble extends StatelessWidget {
   });
 
   final AgentMessage message;
+  final bool compactAssistantLabel;
   final AgentReasoningView? reasoning;
   final bool isCurrentAnswerEvidence;
   final String queryDetailsKey;
@@ -3298,20 +3360,21 @@ final class _MessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (!user)
+              if (!user && (!compactAssistantLabel || status != null))
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text(
-                      'Agent',
-                      style: TextStyle(
-                        color: _agentMuted,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
+                    if (!compactAssistantLabel)
+                      const Text(
+                        'Agent',
+                        style: TextStyle(
+                          color: _agentMuted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
-                    ),
                     if (status != null) ...[
-                      const SizedBox(width: 8),
+                      if (!compactAssistantLabel) const SizedBox(width: 8),
                       _MessageStatus(
                         label: status,
                         failed: message.status == AgentMessageStatus.failed,
@@ -3327,12 +3390,16 @@ final class _MessageBubble extends StatelessWidget {
                 ),
               if (text.isNotEmpty) ...[
                 if (!user) const SizedBox(height: 5),
-                AssistantMarkdown(data: text),
+                AssistantMarkdown(
+                  key: ValueKey('agent-assistant-markdown-${message.id}'),
+                  data: text,
+                  streaming: message.status == AgentMessageStatus.streaming,
+                ),
               ] else if (message.status != AgentMessageStatus.complete) ...[
                 const SizedBox(height: 4),
                 Text(
                   message.status == AgentMessageStatus.failed
-                      ? '本次回复未完成。操作结果以方案卡为准，可导出最近日志排查。'
+                      ? '本次回复未完成。操作结果以方案卡为准；可在设置中导出最近日志排查。'
                       : message.status == AgentMessageStatus.streaming
                       ? (reasoning?.active == true ? '正在思考…' : '正在准备回复…')
                       : '回复已停止。',
@@ -3470,8 +3537,10 @@ String _failureText(AgentFailureCode code) => switch (code) {
   AgentFailureCode.redirectRejected => '模型服务返回内容无法安全验证。',
   AgentFailureCode.resourceLimit => '回复超出当前处理上限。',
   AgentFailureCode.contextLimit => '当前请求超出模型服务的上下文容量，请缩短内容或减少上下文预算后重试。',
+  AgentFailureCode.responseLengthLimit =>
+    '本次回复达到输出长度上限；已收到的回复内容已保留，截断部分未作为操作提交。你可以继续追问，或在设置中调整默认输出上限（有效值可能受当前模型路由限制）。',
   AgentFailureCode.reasoningRejected =>
-    '模型服务拒绝了 high 思考参数，未自动改用其他强度。请换用其他模型或导出最近日志。',
+    '模型服务拒绝了 high 思考参数，未自动改用其他强度。请换用其他模型或在设置中导出最近日志。',
   AgentFailureCode.cancelled => '本次生成已取消。',
   AgentFailureCode.closed => 'Agent 服务已关闭，请重新打开页面。',
   AgentFailureCode.toolUnavailable => '请求的工具不在本次可用范围内，已停止本次处理。',

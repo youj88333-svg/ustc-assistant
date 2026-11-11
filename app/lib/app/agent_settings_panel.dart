@@ -1591,6 +1591,7 @@ String _failureText(AgentFailureCode code) => switch (code) {
   AgentFailureCode.invalidInput => '输入不符合要求，请检查后重试。',
   AgentFailureCode.imageRejected => '模型拒绝了附图；请换用支持图片输入的模型后重试。',
   AgentFailureCode.contextLimit => '模型服务的上下文容量不足，请降低上下文预算或换用更大容量的模型。',
+  AgentFailureCode.responseLengthLimit => '本次生成达到回复长度上限。',
   AgentFailureCode.reasoningRejected =>
     '模型服务拒绝了 high 思考参数，未自动改用其他强度。请换用其他模型或导出最近日志。',
   AgentFailureCode.secretDetected => '输入包含受保护内容，请移除后重试。',
