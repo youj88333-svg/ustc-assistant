@@ -2941,6 +2941,8 @@ Stream<ModelEvent> _batchModelDeltas(Stream<ModelEvent> events) {
   Timer? timer;
   final buffer = StringBuffer();
   var reasoning = false;
+  var sawReasoning = false;
+  var sawText = false;
 
   void flush() {
     timer?.cancel();
@@ -2971,9 +2973,21 @@ Stream<ModelEvent> _batchModelDeltas(Stream<ModelEvent> events) {
         (event) {
           switch (event) {
             case ModelTextDelta():
-              addDelta(event.text, isReasoning: false);
+              if (sawText) {
+                addDelta(event.text, isReasoning: false);
+              } else if (event.text.isNotEmpty) {
+                flush();
+                sawText = true;
+                controller.add(event);
+              }
             case ModelReasoningDelta():
-              addDelta(event.text, isReasoning: true);
+              if (sawReasoning) {
+                addDelta(event.text, isReasoning: true);
+              } else if (event.text.isNotEmpty) {
+                flush();
+                sawReasoning = true;
+                controller.add(event);
+              }
             case ModelCompleted():
               flush();
               controller.add(event);

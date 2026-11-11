@@ -298,12 +298,30 @@ void main() {
           tail: '，已完成。',
         );
         await _sendFromProduct(tester, '只测试合成流式正文');
+        bool receivedLiveReply() {
+          final view = runtime.agent.view;
+          return view.reasoningByMessage.values.any(
+                (v) => v.text == _reasoning,
+              ) &&
+              view.messages.lastOrNull?.text == 'I4 合成流式正文';
+        }
+
         await _pumpUntil(
           tester,
-          () => runtime.agent.view.reasoningByMessage.values.any(
-            (v) => v.text == _reasoning,
-          ),
-          reason: 'explicit provider reasoning must appear while SSE is open',
+          () => receivedLiveReply() || runtime.agent.view.failure != null,
+          reason: 'receive both provider fields while the SSE response is open',
+        );
+        expect(
+          receivedLiveReply(),
+          isTrue,
+          reason:
+              'phase=${runtime.agent.view.phase.name} '
+              'failure=${runtime.agent.view.failure?.name} '
+              'remainingReplies=${service.remainingReplies} '
+              'serverFailureStage=${service.failureStage} '
+              'serverFailureTypes=${service.failures} '
+              'socketCreations=${http.socketCreations} '
+              'deniedConnections=${http.deniedConnections}',
         );
         expect(runtime.agent.view.phase, AgentPhase.generating);
         expect(
@@ -1587,9 +1605,10 @@ final class _LoopbackService {
         reason: 'every model request needs an explicit synthetic script',
       );
       final script = _replies.removeFirst();
-      stage = 'toolSet';
       if (!script.summary) {
+        stage = 'outputBudget';
         expectSync(body['max_tokens'], AgentContextOptions.defaultOutputTokens);
+        stage = 'toolSet';
         final tools = body['tools'] as List;
         expectSync(tools, hasLength(20));
         expectSync(

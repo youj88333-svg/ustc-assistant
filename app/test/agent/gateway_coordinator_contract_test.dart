@@ -230,6 +230,31 @@ void main() {
       expect(service.chatBodies.last, isNot(contains('tool_choice')));
       expect(service.failures, isEmpty);
       expect(await _activeRun(store), isNull);
+
+      final hold = Completer<void>();
+      service.heldReply = hold.future;
+      final live = coordinator.changes.firstWhere(
+        (view) =>
+            view.phase == AgentPhase.generating &&
+            view.messages.lastOrNull?.text == '合成正文分片' &&
+            view.reasoningByMessage.values.any((view) => view.text == '合成推理分片'),
+      );
+      final reply = coordinator.send('在 SSE 尚未结束时接收流式片段');
+      try {
+        await live.timeout(const Duration(seconds: 2));
+        expect(service.chatBodies.last['max_tokens'], 16384);
+        expect(coordinator.view.phase, AgentPhase.generating);
+      } finally {
+        hold.complete();
+        await reply.timeout(const Duration(seconds: 8));
+      }
+      expect(coordinator.view.failure, isNull);
+      expect(
+        coordinator.view.messages.last.status,
+        AgentMessageStatus.complete,
+      );
+      expect(coordinator.view.messages.last.text, '合成正文分片');
+      expect(service.failures, isEmpty);
     },
   );
 
@@ -525,6 +550,7 @@ final class _LoopbackModelService {
   int typedCapacityResponsesSent = 0;
   int plainTextRepliesRemaining = 0;
   String nextPlainText = 'synthetic loopback answer';
+  Future<void>? heldReply;
   String? nextToolResultText;
   String? forwardedProof;
 
@@ -593,6 +619,34 @@ final class _LoopbackModelService {
       if (plainTextRepliesRemaining > 0) {
         plainTextRepliesRemaining--;
         await _writeText(request.response, nextPlainText);
+        return;
+      }
+
+      final hold = heldReply;
+      if (hold != null) {
+        heldReply = null;
+        await _writeSse(request.response, [
+          for (final delta in const [
+            {'reasoning_content': '合成推理'},
+            {'reasoning_content': '分片'},
+            {'content': '合成正文'},
+            {'content': '分片'},
+          ])
+            {
+              'choices': [
+                {'index': 0, 'delta': delta, 'finish_reason': null},
+              ],
+            },
+          {
+            'choices': [
+              {
+                'index': 0,
+                'delta': <String, Object?>{},
+                'finish_reason': 'stop',
+              },
+            ],
+          },
+        ], beforeFinalEvent: hold);
         return;
       }
 
@@ -776,15 +830,20 @@ final class _LoopbackModelService {
 
   Future<void> _writeSse(
     HttpResponse response,
-    List<Map<String, Object?>> events,
-  ) async {
+    List<Map<String, Object?>> events, {
+    Future<void>? beforeFinalEvent,
+  }) async {
     response.headers.contentType = ContentType(
       'text',
       'event-stream',
       charset: 'utf-8',
     );
-    for (final event in events) {
-      response.write('data: ${jsonEncode(event)}\n\n');
+    response.bufferOutput = false;
+    for (var index = 0; index < events.length; index++) {
+      if (beforeFinalEvent != null && index == events.length - 1) {
+        await beforeFinalEvent;
+      }
+      response.write('data: ${jsonEncode(events[index])}\n\n');
       await response.flush();
     }
     response.write('data: [DONE]\n\n');
